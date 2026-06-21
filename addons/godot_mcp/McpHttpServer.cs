@@ -530,25 +530,26 @@ public partial class McpHttpServer : Node
         if (p.TryGetProperty("value", out JsonElement val))
         {
             // Convert the JSON value to a Godot Variant based on its type
+            // In Godot C#, Variant has implicit conversion from C# types —
+            // you just assign the value directly, no "new Variant()" needed
             Variant godotVal;
 
             if (val.ValueKind == JsonValueKind.True)
             {
-                godotVal = new Variant(true);
+                godotVal = true;
             }
             else if (val.ValueKind == JsonValueKind.False)
             {
-                godotVal = new Variant(false);
+                godotVal = false;
             }
             else if (val.ValueKind == JsonValueKind.Number)
             {
-                godotVal = new Variant(val.GetDouble());
+                godotVal = val.GetDouble();
             }
             else if (val.ValueKind == JsonValueKind.String)
             {
-                string strVal = val.GetString();
-                if (strVal == null) strVal = "";
-                godotVal = new Variant(strVal);
+                string strVal = val.GetString() ?? "";
+                godotVal = strVal;
             }
             else if (val.ValueKind == JsonValueKind.Array)
             {
@@ -557,7 +558,7 @@ public partial class McpHttpServer : Node
             }
             else
             {
-                godotVal = new Variant("");
+                godotVal = "";
             }
 
             node.Set(property, godotVal);
@@ -579,10 +580,10 @@ public partial class McpHttpServer : Node
         {
             float x = (float)items[0].GetDouble();
             float y = (float)items[1].GetDouble();
-            return new Variant(new Vector2(x, y));
+            return new Vector2(x, y);
         }
 
-        return new Variant("");
+        return "";
     }
 
     // -- Get all properties of a node --------------------------------------

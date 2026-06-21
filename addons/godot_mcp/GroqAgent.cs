@@ -71,7 +71,7 @@ public class GroqAgent
         _history = new List<ApiMessage>();
 
         // Try to find the API key from the environment
-        string apiKey = Environment.GetEnvironmentVariable("GROQ_API_KEY");
+        string apiKey = System.Environment.GetEnvironmentVariable("GROQ_API_KEY");
         if (apiKey == null)
         {
             apiKey = "";
@@ -81,7 +81,7 @@ public class GroqAgent
         if (apiKey == "")
         {
             DotNetEnv.Env.TraversePath().Load();
-            apiKey = Environment.GetEnvironmentVariable("GROQ_API_KEY");
+            apiKey = System.Environment.GetEnvironmentVariable("GROQ_API_KEY");
             if (apiKey == null)
             {
                 apiKey = "";
