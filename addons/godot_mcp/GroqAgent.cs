@@ -149,8 +149,14 @@ public class GroqAgent
         if (!res.IsSuccessStatusCode)
             throw new Exception($"API error {res.StatusCode}: {text}");
 
+        GD.Print("[GodotMCP] Raw API response: " + text);
+
         return JsonSerializer.Deserialize<ApiResponse>(text,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                PropertyNameCaseInsensitive = true
+            })
             ?? throw new Exception("Failed to deserialize API response");
     }
 }
