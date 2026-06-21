@@ -20,10 +20,24 @@ The whole flow takes about 5 minutes once you know the pattern.
 
 - **`GroqAgent.cs`** — LLM chat loop. You don't touch this when adding a tool.
   It automatically picks up new tools via `GodotTools.GetToolDefinitions()`.
-- **`GodotTools.cs`** — client side. Defines what tools exist (schema the LLM
-  sees) and forwards calls to the HTTP server. **You add 2 things here.**
-- **`McpHttpServer.cs`** — server side (runs inside Godot). Actually executes
-  the tool against the editor. **You add 2 things here.**
+- **`GodotTools.cs`** — **schema + HTTP router.** Tells the LLM what tools
+  exist (name, description, params) and forwards calls to the local server.
+  **You add 2 things here.**
+- **`McpHttpServer.cs`** — **actual implementations.** Runs inside Godot on
+  the main thread and calls real `EditorInterface` / scene-tree APIs.
+  **You add 2 things here.**
+
+### Why HTTP for a localhost call?
+
+`GroqAgent` runs on a **C# async/await task thread** (needed for non-blocking
+calls to Groq). Godot's editor APIs — `EditorInterface`, `SceneTree`, node
+mutation — are **not thread-safe**. Calling them from a background thread will
+crash or silently corrupt state.
+
+`McpHttpServer._Process()` is driven by Godot's **main game loop**, so it's
+always safe to call editor APIs there. The HTTP hop is the thread-boundary
+handoff: the async thread posts a request, the main thread picks it up in
+`_Process`, does the real editor work, and writes the response back.
 
 The four touch points:
 
@@ -300,6 +314,8 @@ something exotic (loading resources, importing), check the existing
 | `set_node_property` | Set a single prop (handles Vector2, bool, etc.) | ~line 111 |
 | `save_scene` | Save the current scene | ~line 126 |
 | `list_project_files` | Walk `res://` recursively | ~line 130 |
+| `create_new_scene` | Create a `.tscn` file and open it in the editor | ~line 143 |
+| `open_scene` | Open an existing scene by path | ~line 165 |
 
 `create_2d_node` is the cleanest reference for a tool that has optional params,
 type validation, and returns a rich response — copy that pattern when in doubt.
