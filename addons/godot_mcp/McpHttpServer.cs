@@ -3,25 +3,62 @@ using Godot;
 using Godot.Collections;
 using System.Text;
 using System.Text.Json;
+using System.Collections.Generic;
 
 namespace GodotMCP;
+
+// ---------------------------------------------------------------------------
+// McpHttpServer — runs inside the Godot editor on the MAIN THREAD
+//
+// WHY THIS EXISTS:
+//   GroqAgent runs on a background async thread (needed so the editor
+//   doesn't freeze while waiting for the Groq API). But Godot's editor APIs
+//   (EditorInterface, SceneTree, node manipulation) are NOT thread-safe —
+//   calling them from a background thread will crash or corrupt state.
+//
+//   So we use a tiny HTTP server as a thread-boundary handoff:
+//     1. GroqAgent (background thread) sends an HTTP request to localhost:9876
+//     2. This server's _Process() method picks it up (main thread — safe!)
+//     3. The actual Godot API call happens here
+//     4. The response is sent back to GroqAgent
+//
+// This file has two parts:
+//   - The HTTP server itself (Start, Stop, _Process, HandleRequest)
+//   - The tool implementations (CreateNode, SetNodeProperty, etc.)
+// ---------------------------------------------------------------------------
 
 [Tool]
 public partial class McpHttpServer : Node
 {
-    public EditorPlugin? EditorPlugin { get; set; }
+    // The plugin that owns this server (needed for some editor operations)
+    public EditorPlugin EditorPlugin { get; set; }
 
+    // The TCP server that listens for connections
     private const int Port = 9876;
-    private TcpServer _tcpServer = new();
-    private StreamPeerTcp? _client;
+    private TcpServer _tcpServer;
+    private StreamPeerTcp _client;
+
+    public override void _Ready()
+    {
+        _tcpServer = new TcpServer();
+        _client = null;
+    }
+
+    // -----------------------------------------------------------------------
+    // Start / Stop — called by GodotMcpPlugin when the plugin loads/unloads
+    // -----------------------------------------------------------------------
 
     public void Start()
     {
-        var err = _tcpServer.Listen(Port);
+        Error err = _tcpServer.Listen(Port);
         if (err != Error.Ok)
-            GD.PrintErr($"[GodotMCP] Failed to listen on port {Port}: {err}");
+        {
+            GD.PrintErr("[GodotMCP] Failed to listen on port " + Port + ": " + err);
+        }
         else
-            GD.Print($"[GodotMCP] HTTP server listening on port {Port}");
+        {
+            GD.Print("[GodotMCP] HTTP server listening on port " + Port);
+        }
     }
 
     public void Stop()
@@ -34,130 +71,298 @@ public partial class McpHttpServer : Node
         }
     }
 
+    // -----------------------------------------------------------------------
+    // _Process — called every frame by Godot's main loop
+    //
+    // This checks if a client connected, reads their request, handles it,
+    // sends the response, and disconnects. One request per frame, one client
+    // at a time (which is fine since we're the only caller).
+    // -----------------------------------------------------------------------
+
     public override void _Process(double delta)
     {
+        // Check if a new client is trying to connect
         if (_tcpServer.IsConnectionAvailable())
+        {
             _client = _tcpServer.TakeConnection();
+        }
 
-        if (_client == null) return;
+        // No client connected? Nothing to do.
+        if (_client == null)
+        {
+            return;
+        }
+
+        // Client disconnected? Clean up and wait for next one.
         if (_client.GetStatus() != StreamPeerTcp.Status.Connected)
         {
             _client = null;
             return;
         }
 
-        int available = (int)_client.GetAvailableBytes();
-        if (available <= 0) return;
+        // Check if the client sent any data
+        int availableBytes = (int)_client.GetAvailableBytes();
+        if (availableBytes <= 0)
+        {
+            return;
+        }
 
-        string raw = _client.GetString(available);
-        string response = HandleRequest(raw);
-        _client.PutData(Encoding.UTF8.GetBytes(response));
+        // Read the raw HTTP request from the client
+        string rawRequest = _client.GetString(availableBytes);
+
+        // Process the request and get the HTTP response
+        string response = HandleRequest(rawRequest);
+
+        // Send the response back to the client
+        byte[] responseBytes = Encoding.UTF8.GetBytes(response);
+        _client.PutData(responseBytes);
+
+        // Disconnect — we're done with this request
         _client.DisconnectFromHost();
         _client = null;
     }
 
-    private string HandleRequest(string raw)
+    // -----------------------------------------------------------------------
+    // HandleRequest — parses an HTTP request and routes it to Dispatch()
+    //
+    // The request from GodotTools.Call() looks like:
+    //   POST / HTTP/1.1
+    //   Content-Type: application/json
+    //   Content-Length: 64
+    //
+    //   {"action":"create_node","params":{"node_type":"Sprite2D"}}
+    //
+    // We only care about the body (the JSON after the blank line).
+    // -----------------------------------------------------------------------
+
+    private string HandleRequest(string rawRequest)
     {
-        // Extract HTTP body (after \r\n\r\n)
-        int bodyStart = raw.IndexOf("\r\n\r\n");
-        string body = bodyStart >= 0 ? raw[(bodyStart + 4)..] : raw;
+        // Find the blank line that separates HTTP headers from the body
+        // HTTP headers end with \r\n\r\n
+        int bodyStart = rawRequest.IndexOf("\r\n\r\n");
+
+        string body;
+        if (bodyStart >= 0)
+        {
+            // Everything after \r\n\r\n is the JSON body
+            body = rawRequest.Substring(bodyStart + 4);
+        }
+        else
+        {
+            // No headers found — treat the whole thing as the body
+            body = rawRequest;
+        }
 
         try
         {
-            var req = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, JsonElement>>(body);
-            if (req == null)
-                return HttpResponse(JsonSerializer.Serialize(new { error = "Invalid request payload" }), 400);
-            string action = req.TryGetValue("action", out var a) ? a.GetString() ?? "" : "";
-            var paramsEl = req.TryGetValue("params", out var p) ? p : default;
+            // Parse the JSON body into a dictionary
+            Dictionary<string, JsonElement> request;
+            try
+            {
+                request = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body);
+            }
+            catch
+            {
+                request = null;
+            }
 
-            var result = Dispatch(action, paramsEl);
+            if (request == null)
+            {
+                string errorJson = JsonSerializer.Serialize(new { error = "Invalid request payload" });
+                return HttpResponse(errorJson, 400);
+            }
+
+            // Extract the "action" field (e.g. "create_node")
+            string action = "";
+            if (request.TryGetValue("action", out JsonElement actionElement))
+            {
+                if (actionElement.ValueKind == JsonValueKind.String)
+                {
+                    action = actionElement.GetString();
+                    if (action == null) action = "";
+                }
+            }
+
+            // Extract the "params" field (the tool's arguments)
+            JsonElement parameters = default;
+            if (request.TryGetValue("params", out JsonElement paramsElement))
+            {
+                parameters = paramsElement;
+            }
+
+            // Route to the correct tool implementation
+            string result = Dispatch(action, parameters);
             return HttpResponse(result);
         }
         catch (System.Exception ex)
         {
-            return HttpResponse(JsonSerializer.Serialize(new { error = ex.Message }), 400);
+            string errorJson = JsonSerializer.Serialize(new { error = ex.Message });
+            return HttpResponse(errorJson, 400);
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Dispatch — routes an action string to the correct method
+    //
+    // This is the server-side equivalent of GodotTools.ExecuteAsync().
+    // The action name MUST match what GodotTools sends.
+    // -----------------------------------------------------------------------
+
     private string Dispatch(string action, JsonElement parameters)
     {
-        return action switch
+        if (action == "ping")
         {
-            "ping" => Serialize(new { status = "ok", version = "0.1.0" }),
-            "get_scene_tree" => GetSceneTree(),
-            "get_selected_nodes" => GetSelectedNodes(),
-            "create_node" => CreateNode(parameters),
-            "create_2d_node" => Create2DNode(parameters),
-            "delete_node" => DeleteNode(parameters),
-            "set_node_property" => SetNodeProperty(parameters),
-            "get_node_properties" => GetNodeProperties(parameters),
-            "save_scene" => SaveScene(),
-            "get_editor_state" => GetEditorState(),
-            "list_project_files" => ListProjectFiles(parameters),
-            _ => Serialize(new { error = $"Unknown action: {action}" })
-        };
+            return Serialize(new { status = "ok", version = "0.1.0" });
+        }
+        else if (action == "get_scene_tree")
+        {
+            return GetSceneTree();
+        }
+        else if (action == "get_selected_nodes")
+        {
+            return GetSelectedNodes();
+        }
+        else if (action == "create_node")
+        {
+            return CreateNode(parameters);
+        }
+        else if (action == "create_2d_node")
+        {
+            return Create2DNode(parameters);
+        }
+        else if (action == "delete_node")
+        {
+            return DeleteNode(parameters);
+        }
+        else if (action == "set_node_property")
+        {
+            return SetNodeProperty(parameters);
+        }
+        else if (action == "get_node_properties")
+        {
+            return GetNodeProperties(parameters);
+        }
+        else if (action == "save_scene")
+        {
+            return SaveScene();
+        }
+        else if (action == "get_editor_state")
+        {
+            return GetEditorState();
+        }
+        else if (action == "list_project_files")
+        {
+            return ListProjectFiles(parameters);
+        }
+        else
+        {
+            return Serialize(new { error = "Unknown action: " + action });
+        }
     }
 
-    // ── Tool implementations ──────────────────────────────────────────────
+    // =======================================================================
+    // TOOL IMPLEMENTATIONS
+    //
+    // These are the methods that actually touch Godot's editor APIs.
+    // Each one returns a JSON string (success or error).
+    // =======================================================================
 
+    // -- Get the full node tree of the currently open scene ----------------
     private string GetSceneTree()
     {
-        var root = EditorInterface.Singleton.GetEditedSceneRoot();
-        if (root == null) return Serialize(new { error = "No scene open" });
-        return Serialize(new { root = NodeToDict(root) });
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null)
+        {
+            return Serialize(new { error = "No scene open" });
+        }
+
+        // Convert the node tree into a nested dictionary structure
+        Dictionary tree = NodeToDict(root);
+        return Serialize(new { root = tree });
     }
 
+    // Recursively converts a Node and its children into a dictionary:
+    // { "name": "Player", "type": "CharacterBody2D", "path": "/root/Player", "children": [...] }
     private Dictionary NodeToDict(Node node)
     {
-        var children = new Godot.Collections.Array<Dictionary>();
-        foreach (Node child in node.GetChildren())
-            children.Add(NodeToDict(child));
+        Godot.Collections.Array<Dictionary> children = new Godot.Collections.Array<Dictionary>();
 
-        return new Dictionary
+        int childCount = node.GetChildCount();
+        for (int i = 0; i < childCount; i++)
+        {
+            Node child = node.GetChild(i);
+            Dictionary childDict = NodeToDict(child);
+            children.Add(childDict);
+        }
+
+        Dictionary result = new Dictionary
         {
             ["name"] = node.Name.ToString(),
             ["type"] = node.GetClass(),
             ["path"] = node.GetPath().ToString(),
             ["children"] = children
         };
+        return result;
     }
 
+    // -- Get the nodes currently selected in the editor --------------------
     private string GetSelectedNodes()
     {
-        var selected = EditorInterface.Singleton.GetSelection().GetSelectedNodes();
-        var nodes = System.Linq.Enumerable.ToList(System.Linq.Enumerable.Select(selected, n => new
+        Godot.Collections.Array<Node> selected = EditorInterface.Singleton.GetSelection().GetSelectedNodes();
+
+        // Build a list of { name, type, path } for each selected node
+        List<object> nodeList = new List<object>();
+        for (int i = 0; i < selected.Count; i++)
         {
-            name = n.Name.ToString(),
-            type = n.GetClass(),
-            path = n.GetPath().ToString()
-        }));
-        return Serialize(new { selected = nodes });
+            Node n = selected[i];
+            nodeList.Add(new
+            {
+                name = n.Name.ToString(),
+                type = n.GetClass(),
+                path = n.GetPath().ToString()
+            });
+        }
+
+        return Serialize(new { selected = nodeList });
     }
 
+    // -- Create any node type in the current scene -------------------------
     private string CreateNode(JsonElement p)
     {
-        var root = EditorInterface.Singleton.GetEditedSceneRoot();
-        if (root == null) return Serialize(new { error = "No scene open. Create or open a scene first." });
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null)
+        {
+            return Serialize(new { error = "No scene open. Create or open a scene first." });
+        }
 
+        // Read the parameters from the JSON
         string nodeType = GetStr(p, "node_type", "Node");
         string nodeName = GetStr(p, "node_name", nodeType);
         string parentPath = GetStr(p, "parent_path", "");
 
+        // Find the parent node (defaults to the scene root)
         Node parent = root;
-        if (!string.IsNullOrEmpty(parentPath))
+        if (parentPath != "")
         {
-            var found = root.GetNodeOrNull(parentPath);
-            if (found == null) return Serialize(new { error = $"Parent not found: {parentPath}" });
+            Node found = root.GetNodeOrNull(parentPath);
+            if (found == null)
+            {
+                return Serialize(new { error = "Parent not found: " + parentPath });
+            }
             parent = found;
         }
 
-        // Instantiate the node type
-        var newNode = ClassDB.Instantiate(nodeType).As<Node>();
-        if (newNode == null) return Serialize(new { error = $"Unknown node type: {nodeType}" });
+        // Create the node using Godot's ClassDB (like Object.new() in GDScript)
+        Node newNode = ClassDB.Instantiate(nodeType).As<Node>();
+        if (newNode == null)
+        {
+            return Serialize(new { error = "Unknown node type: " + nodeType });
+        }
 
+        // Add it to the scene tree
         newNode.Name = nodeName;
         parent.AddChild(newNode);
-        newNode.Owner = root;
+        newNode.Owner = root;  // Required for the node to be saved with the scene
 
         return Serialize(new
         {
@@ -167,76 +372,102 @@ public partial class McpHttpServer : Node
         });
     }
 
-    /// <summary>
-    /// Specialized creator for 2D nodes. Defaults to Node2D, validates that the
-    /// requested type is a CanvasItem-derived 2D class, and optionally sets the
-    /// initial position. The position is applied only if the instantiated node
-    /// is a Node2D (other 2D types like Label/Button inherit from Control and
-    /// use a different position property — for those, we skip silently rather
-    /// than error out).
-    /// </summary>
+    // -- Create a 2D node (specialized version with position support) ------
+    //
+    // Same as CreateNode but:
+    //   - Defaults to Node2D
+    //   - Validates that the type is a CanvasItem (2D node)
+    //   - Optionally sets the initial position
     private string Create2DNode(JsonElement p)
     {
-        var root = EditorInterface.Singleton.GetEditedSceneRoot();
-        if (root == null) return Serialize(new { error = "No scene open. Create or open a scene first." });
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null)
+        {
+            return Serialize(new { error = "No scene open. Create or open a scene first." });
+        }
 
         string nodeType = GetStr(p, "node_type", "Node2D");
         string nodeName = GetStr(p, "node_name", nodeType);
         string parentPath = GetStr(p, "parent_path", "");
 
-        // Resolve parent
+        // Find the parent node
         Node parent = root;
-        if (!string.IsNullOrEmpty(parentPath))
+        if (parentPath != "")
         {
-            var found = root.GetNodeOrNull(parentPath);
-            if (found == null) return Serialize(new { error = $"Parent not found: {parentPath}" });
+            Node found = root.GetNodeOrNull(parentPath);
+            if (found == null)
+            {
+                return Serialize(new { error = "Parent not found: " + parentPath });
+            }
             parent = found;
         }
 
-        // Validate it's a 2D type: it must exist and inherit from CanvasItem
-        // (the common base for Node2D, Sprite2D, Control, Label, Button, etc.).
+        // Validate it's a 2D type — must be a CanvasItem subclass
+        // (Node2D, Sprite2D, CharacterBody2D, Label, Button, etc. all inherit from CanvasItem)
         if (!ClassDB.ClassExists(nodeType))
-            return Serialize(new { error = $"Unknown node type: {nodeType}" });
+        {
+            return Serialize(new { error = "Unknown node type: " + nodeType });
+        }
 
         if (!ClassDB.IsParentClass(nodeType, "CanvasItem"))
+        {
             return Serialize(new
             {
-                error = $"Type '{nodeType}' is not a 2D node. " +
-                        $"create_2d_node only accepts CanvasItem-derived classes " +
-                        $"(Node2D, Sprite2D, CharacterBody2D, Label, Button, etc.). " +
-                        $"Use create_node for non-2D types."
+                error = "Type '" + nodeType + "' is not a 2D node. " +
+                        "create_2d_node only accepts CanvasItem-derived classes " +
+                        "(Node2D, Sprite2D, CharacterBody2D, RigidBody2D, StaticBody2D, " +
+                        "CollisionShape2D, Camera2D, Label, Button, etc.). " +
+                        "Use create_node for non-2D types."
             });
+        }
 
-        // Instantiate
-        var newNode = ClassDB.Instantiate(nodeType).As<Node>();
-        if (newNode == null) return Serialize(new { error = $"Failed to instantiate: {nodeType}" });
+        // Create the node
+        Node newNode = ClassDB.Instantiate(nodeType).As<Node>();
+        if (newNode == null)
+        {
+            return Serialize(new { error = "Failed to instantiate: " + nodeType });
+        }
 
         newNode.Name = nodeName;
         parent.AddChild(newNode);
         newNode.Owner = root;
 
-        // Apply initial position if provided AND the node is a Node2D
-        string? positionNote = null;
-        if (p.TryGetProperty("position", out var posEl) && posEl.ValueKind == JsonValueKind.Array)
+        // If a position was provided, try to apply it
+        string positionNote = "default";
+
+        if (p.TryGetProperty("position", out JsonElement posEl))
         {
-            var items = System.Linq.Enumerable.ToList(posEl.EnumerateArray());
-            if (items.Count >= 2 && newNode is Node2D n2d)
+            if (posEl.ValueKind == JsonValueKind.Array)
             {
-                n2d.Position = new Vector2(
-                    (float)items[0].GetDouble(),
-                    (float)items[1].GetDouble());
-                positionNote = $"position=[{items[0].GetDouble()}, {items[1].GetDouble()}]";
-            }
-            else if (items.Count >= 2 && newNode is Control ctrl)
-            {
-                ctrl.Position = new Vector2(
-                    (float)items[0].GetDouble(),
-                    (float)items[1].GetDouble());
-                positionNote = $"position=[{items[0].GetDouble()}, {items[1].GetDouble()}]";
-            }
-            else
-            {
-                positionNote = "position ignored (node type does not expose a 2D position)";
+                // Read the [x, y] values from the array
+                List<JsonElement> items = new List<JsonElement>();
+                foreach (JsonElement item in posEl.EnumerateArray())
+                {
+                    items.Add(item);
+                }
+
+                if (items.Count >= 2)
+                {
+                    double x = items[0].GetDouble();
+                    double y = items[1].GetDouble();
+
+                    if (newNode is Node2D n2d)
+                    {
+                        // Node2D and subclasses (Sprite2D, CharacterBody2D, etc.)
+                        n2d.Position = new Vector2((float)x, (float)y);
+                        positionNote = "position=[" + x + ", " + y + "]";
+                    }
+                    else if (newNode is Control ctrl)
+                    {
+                        // Control and subclasses (Label, Button, Panel, etc.)
+                        ctrl.Position = new Vector2((float)x, (float)y);
+                        positionNote = "position=[" + x + ", " + y + "]";
+                    }
+                    else
+                    {
+                        positionNote = "position ignored (node type does not expose a 2D position)";
+                    }
+                }
             }
         }
 
@@ -246,148 +477,285 @@ public partial class McpHttpServer : Node
             type = nodeType,
             path = newNode.GetPath().ToString(),
             parent = parent.GetPath().ToString(),
-            position = positionNote ?? "default"
+            position = positionNote
         });
     }
 
+    // -- Delete a node from the scene --------------------------------------
     private string DeleteNode(JsonElement p)
     {
-        var root = EditorInterface.Singleton.GetEditedSceneRoot();
-        if (root == null) return Serialize(new { error = "No scene open" });
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null)
+        {
+            return Serialize(new { error = "No scene open" });
+        }
 
         string path = GetStr(p, "path", "");
-        var node = root.GetNodeOrNull(path);
-        if (node == null) return Serialize(new { error = $"Node not found: {path}" });
+        Node node = root.GetNodeOrNull(path);
+        if (node == null)
+        {
+            return Serialize(new { error = "Node not found: " + path });
+        }
 
         string name = node.Name.ToString();
-        node.QueueFree();
+        node.QueueFree();  // Schedules the node for deletion at the end of the frame
         return Serialize(new { deleted = name });
     }
 
+    // -- Set a property on a node ------------------------------------------
+    //
+    // Handles multiple value types:
+    //   - string  → pass as-is
+    //   - number  → pass as double/float
+    //   - boolean → true/false
+    //   - array   → try to parse as Vector2 [x, y]
     private string SetNodeProperty(JsonElement p)
     {
-        var root = EditorInterface.Singleton.GetEditedSceneRoot();
-        if (root == null) return Serialize(new { error = "No scene open" });
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null)
+        {
+            return Serialize(new { error = "No scene open" });
+        }
 
         string path = GetStr(p, "path", "");
         string property = GetStr(p, "property", "");
-        var node = root.GetNodeOrNull(path);
-        if (node == null) return Serialize(new { error = $"Node not found: {path}" });
 
-        if (p.TryGetProperty("value", out var val))
+        Node node = root.GetNodeOrNull(path);
+        if (node == null)
         {
-            // Convert JsonElement to Godot Variant
-            Variant godotVal = val.ValueKind switch
+            return Serialize(new { error = "Node not found: " + path });
+        }
+
+        // Check if a "value" was provided
+        if (p.TryGetProperty("value", out JsonElement val))
+        {
+            // Convert the JSON value to a Godot Variant based on its type
+            Variant godotVal;
+
+            if (val.ValueKind == JsonValueKind.True)
             {
-                JsonValueKind.True => true,
-                JsonValueKind.False => false,
-                JsonValueKind.Number => val.GetDouble(),
-                JsonValueKind.String => val.GetString() ?? "",
-                JsonValueKind.Array => ParseVector2(val),
-                _ => Variant.From("")
-            };
+                godotVal = new Variant(true);
+            }
+            else if (val.ValueKind == JsonValueKind.False)
+            {
+                godotVal = new Variant(false);
+            }
+            else if (val.ValueKind == JsonValueKind.Number)
+            {
+                godotVal = new Variant(val.GetDouble());
+            }
+            else if (val.ValueKind == JsonValueKind.String)
+            {
+                string strVal = val.GetString();
+                if (strVal == null) strVal = "";
+                godotVal = new Variant(strVal);
+            }
+            else if (val.ValueKind == JsonValueKind.Array)
+            {
+                // Arrays are treated as Vector2
+                godotVal = ParseVector2(val);
+            }
+            else
+            {
+                godotVal = new Variant("");
+            }
+
             node.Set(property, godotVal);
         }
 
         return Serialize(new { set = property, node = path });
     }
 
+    // Parse a JSON array [x, y] into a Godot Vector2
     private Variant ParseVector2(JsonElement arr)
     {
-        // Allow [x, y] arrays to be set as Vector2
-        var items = System.Linq.Enumerable.ToList(arr.EnumerateArray());
+        List<JsonElement> items = new List<JsonElement>();
+        foreach (JsonElement item in arr.EnumerateArray())
+        {
+            items.Add(item);
+        }
+
         if (items.Count >= 2)
-            return new Vector2((float)items[0].GetDouble(), (float)items[1].GetDouble());
-        return Variant.From("");
+        {
+            float x = (float)items[0].GetDouble();
+            float y = (float)items[1].GetDouble();
+            return new Variant(new Vector2(x, y));
+        }
+
+        return new Variant("");
     }
 
+    // -- Get all properties of a node --------------------------------------
     private string GetNodeProperties(JsonElement p)
     {
-        var root = EditorInterface.Singleton.GetEditedSceneRoot();
-        if (root == null) return Serialize(new { error = "No scene open" });
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null)
+        {
+            return Serialize(new { error = "No scene open" });
+        }
 
         string path = GetStr(p, "path", "");
-        var node = root.GetNodeOrNull(path);
-        if (node == null) return Serialize(new { error = $"Node not found: {path}" });
-
-        var props = new Dictionary();
-        foreach (var prop in node.GetPropertyList())
+        Node node = root.GetNodeOrNull(path);
+        if (node == null)
         {
-            if (prop["name"].AsString() is string pname && !pname.StartsWith("_"))
+            return Serialize(new { error = "Node not found: " + path });
+        }
+
+        // Iterate over all properties the node exposes
+        // and build a dictionary of { property_name: value_as_string }
+        Dictionary props = new Dictionary();
+        Godot.Collections.Array propertyList = node.GetPropertyList();
+
+        for (int i = 0; i < propertyList.Count; i++)
+        {
+            Godot.Collections.Dictionary propInfo = (Godot.Collections.Dictionary)propertyList[i];
+
+            // propInfo["name"] returns a Variant — we need to cast it to string
+            string pname = propInfo["name"].AsString();
+
+            // Skip internal/hidden properties (they start with underscore)
+            if (pname.StartsWith("_"))
             {
-                try { props[pname] = node.Get(pname).ToString(); }
-                catch { /* skip unreadable props */ }
+                continue;
+            }
+
+            try
+            {
+                Variant propValue = node.Get(pname);
+                props[pname] = propValue.ToString();
+            }
+            catch
+            {
+                // Some properties can't be read — skip them silently
             }
         }
 
         return Serialize(new { node = path, properties = props });
     }
 
+    // -- Save the current scene to disk ------------------------------------
     private string SaveScene()
     {
         EditorInterface.Singleton.SaveScene();
         return Serialize(new { saved = true });
     }
 
+    // -- Get the current editor state --------------------------------------
     private string GetEditorState()
     {
-        var root = EditorInterface.Singleton.GetEditedSceneRoot();
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+
+        bool hasOpenScene = root != null;
+        string sceneName = "";
+        string scenePath = "";
+
+        if (root != null)
+        {
+            sceneName = root.Name.ToString();
+            scenePath = root.SceneFilePath;
+        }
+
         return Serialize(new
         {
-            has_open_scene = root != null,
-            scene_name = root?.Name.ToString() ?? "",
-            scene_path = root?.SceneFilePath ?? ""
+            has_open_scene = hasOpenScene,
+            scene_name = sceneName,
+            scene_path = scenePath
         });
     }
 
+    // -- List all files in a project directory -----------------------------
     private string ListProjectFiles(JsonElement p)
     {
         string dirPath = GetStr(p, "path", "res://");
-        var files = new System.Collections.Generic.List<string>();
+
+        List<string> files = new List<string>();
         WalkDir(dirPath, files);
-        return Serialize(new { path = dirPath, files });
+
+        return Serialize(new { path = dirPath, files = files });
     }
 
-    private void WalkDir(string path, System.Collections.Generic.List<string> output)
+    // Recursively walk a directory and collect all file paths
+    private void WalkDir(string path, List<string> output)
     {
-        using var dir = DirAccess.Open(path);
-        if (dir == null) return;
+        DirAccess dir = DirAccess.Open(path);
+        if (dir == null)
+        {
+            return;
+        }
+
         dir.ListDirBegin();
         string item = dir.GetNext();
+
+        // dir.GetNext() returns "" when there are no more entries
         while (item != "")
         {
+            // Skip hidden files and directories (starting with ".")
             if (!item.StartsWith("."))
             {
-                string full = path.PathJoin(item);
-                if (dir.CurrentIsDir()) WalkDir(full, output);
-                else output.Add(full);
+                string fullPath = path.PathJoin(item);
+
+                if (dir.CurrentIsDir())
+                {
+                    // Recurse into subdirectories
+                    WalkDir(fullPath, output);
+                }
+                else
+                {
+                    output.Add(fullPath);
+                }
             }
+
             item = dir.GetNext();
         }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────
+    // =======================================================================
+    // Helper methods
+    // =======================================================================
 
+    // Safely read a string from a JsonElement.
+    // Returns the fallback if the key doesn't exist or isn't a string.
     private static string GetStr(JsonElement el, string key, string fallback)
     {
-        if (el.ValueKind == JsonValueKind.Object &&
-            el.TryGetProperty(key, out var v) &&
-            v.ValueKind == JsonValueKind.String)
-            return v.GetString() ?? fallback;
+        if (el.ValueKind == JsonValueKind.Object)
+        {
+            if (el.TryGetProperty(key, out JsonElement v))
+            {
+                if (v.ValueKind == JsonValueKind.String)
+                {
+                    string result = v.GetString();
+                    if (result != null)
+                    {
+                        return result;
+                    }
+                }
+            }
+        }
         return fallback;
     }
 
-    private static string Serialize(object obj) =>
-        JsonSerializer.Serialize(obj, new JsonSerializerOptions
+    // Serialize any object to a JSON string with snake_case property names
+    private static string Serialize(object obj)
+    {
+        JsonSerializerOptions opts = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-        });
+        };
+        return JsonSerializer.Serialize(obj, opts);
+    }
 
-    private static string HttpResponse(string body, int code = 200) =>
-        $"HTTP/1.1 {code} OK\r\n" +
-        $"Content-Type: application/json\r\n" +
-        $"Content-Length: {Encoding.UTF8.GetByteCount(body)}\r\n" +
-        $"Access-Control-Allow-Origin: *\r\n" +
-        $"\r\n{body}";
+    // Build a minimal HTTP response with a JSON body
+    private static string HttpResponse(string body, int code)
+    {
+        if (code == 0) code = 200;
+        int byteCount = Encoding.UTF8.GetByteCount(body);
+
+        return "HTTP/1.1 " + code + " OK\r\n" +
+               "Content-Type: application/json\r\n" +
+               "Content-Length: " + byteCount + "\r\n" +
+               "Access-Control-Allow-Origin: *\r\n" +
+               "\r\n" +
+               body;
+    }
 }
 #endif

@@ -8,37 +8,94 @@ using System;
 
 namespace GodotMCP;
 
+// ---------------------------------------------------------------------------
+// GodotTools — two jobs:
+//
+//   1. TOOL DEFINITIONS: Tell the LLM what tools exist (name, description,
+//      what parameters they accept). The LLM uses this to decide what to call.
+//
+//   2. TOOL EXECUTION (ROUTING): When the LLM wants to call a tool, this class
+//      figures out which method on the HTTP server to call, and sends the
+//      request over localhost.
+//
+// The actual tool implementations live in McpHttpServer.cs — this file just
+// defines the schemas and routes the calls.
+// ---------------------------------------------------------------------------
+
 public class GodotTools
 {
+    // The HTTP server running inside Godot on the main thread
     private const string ServerUrl = "http://localhost:9876/";
-    private readonly HttpClient _http = new();
 
-    // ── Tool definitions (what the AI sees and uses) ──────────────────────
+    // An HTTP client used to talk to that local server
+    private HttpClient _http;
 
-    public List<object> GetToolDefinitions() => new()
+    public GodotTools()
     {
-        Tool("ping_godot",
-            "Check if the Godot editor plugin is running. Call this first to verify connection.",
-            EmptyParams()),
+        _http = new HttpClient();
+    }
 
-        Tool("get_editor_state",
-            "Get the current editor state: whether a scene is open, and its name/path.",
-            EmptyParams()),
+    // =======================================================================
+    // GetToolDefinitions — returns a list of all tool schemas
+    //
+    // Each tool schema tells the LLM:
+    //   - The tool's name (e.g. "create_node")
+    //   - A description of what it does
+    //   - The parameters it accepts (as a JSON Schema object)
+    //
+    // The LLM uses these schemas to decide which tool to call and what
+    // arguments to pass. This list is sent with EVERY API request.
+    //
+    // The format matches the OpenAI function-calling API:
+    // {
+    //   "type": "function",
+    //   "function": {
+    //     "name": "create_node",
+    //     "description": "Create a new node...",
+    //     "parameters": { "type": "object", "properties": { ... } }
+    //   }
+    // }
+    // =======================================================================
+    public List<object> GetToolDefinitions()
+    {
+        List<object> tools = new List<object>();
 
-        Tool("get_scene_tree",
-            "Get the full node tree of the currently open scene. Returns all nodes with their types, paths, and children.",
-            EmptyParams()),
+        // -- Health check --
+        tools.Add(Tool(
+            name: "ping_godot",
+            description: "Check if the Godot editor plugin is running. Call this first to verify connection.",
+            parameters: EmptyParams()
+        ));
 
-        Tool("get_selected_nodes",
-            "Get the nodes currently selected in the Godot editor viewport or scene tree.",
-            EmptyParams()),
+        // -- Editor state --
+        tools.Add(Tool(
+            name: "get_editor_state",
+            description: "Get the current editor state: whether a scene is open, and its name/path.",
+            parameters: EmptyParams()
+        ));
 
-        Tool("create_node",
-            "Create a new node in the current scene. The scene must already be open. " +
-            "Common node types: Node, Node2D, Node3D, Sprite2D, Label, Button, " +
-            "CharacterBody2D, RigidBody2D, StaticBody2D, CollisionShape2D, Camera2D, " +
-            "AudioStreamPlayer, AnimationPlayer, Control, Panel, VBoxContainer, HBoxContainer.",
-            new
+        // -- Scene tree inspection --
+        tools.Add(Tool(
+            name: "get_scene_tree",
+            description: "Get the full node tree of the currently open scene. Returns all nodes with their types, paths, and children.",
+            parameters: EmptyParams()
+        ));
+
+        // -- Selection inspection --
+        tools.Add(Tool(
+            name: "get_selected_nodes",
+            description: "Get the nodes currently selected in the Godot editor viewport or scene tree.",
+            parameters: EmptyParams()
+        ));
+
+        // -- Create any node type --
+        tools.Add(Tool(
+            name: "create_node",
+            description: "Create a new node in the current scene. The scene must already be open. " +
+                         "Common node types: Node, Node2D, Node3D, Sprite2D, Label, Button, " +
+                         "CharacterBody2D, RigidBody2D, StaticBody2D, CollisionShape2D, Camera2D, " +
+                         "AudioStreamPlayer, AnimationPlayer, Control, Panel, VBoxContainer, HBoxContainer.",
+            parameters: new
             {
                 type = "object",
                 properties = new
@@ -51,17 +108,20 @@ public class GodotTools
                         "Path to parent node relative to scene root. Empty = add to root. " +
                         "Example: 'Player' or 'World/Enemies'")
                 },
-                required = new[] { "node_type" }
-            }),
+                required = new string[] { "node_type" }
+            }
+        ));
 
-        Tool("create_2d_node",
-            "Create a new 2D node in the current scene. Convenience wrapper around " +
-            "create_node specialized for 2D workflows: defaults to Node2D, accepts an " +
-            "optional initial position, and validates the type is a CanvasItem-derived " +
-            "2D class (Node2D, Sprite2D, CharacterBody2D, RigidBody2D, StaticBody2D, " +
-            "CollisionShape2D, Camera2D, Label, Button, etc.). Use this when the user " +
-            "asks for a 2D node, sprite, character, or anything that lives in 2D space.",
-            new
+        // -- Create a 2D node (specialized, includes position) --
+        tools.Add(Tool(
+            name: "create_2d_node",
+            description: "Create a new 2D node in the current scene. Convenience wrapper around " +
+                         "create_node specialized for 2D workflows: defaults to Node2D, accepts an " +
+                         "optional initial position, and validates the type is a CanvasItem-derived " +
+                         "2D class (Node2D, Sprite2D, CharacterBody2D, RigidBody2D, StaticBody2D, " +
+                         "CollisionShape2D, Camera2D, Label, Button, etc.). Use this when the user " +
+                         "asks for a 2D node, sprite, character, or anything that lives in 2D space.",
+            parameters: new
             {
                 type = "object",
                 properties = new
@@ -84,69 +144,87 @@ public class GodotTools
                     }
                 },
                 required = new string[] { }
-            }),
+            }
+        ));
 
-        Tool("delete_node",
-            "Delete a node from the current scene by its path.",
-            new
+        // -- Delete a node --
+        tools.Add(Tool(
+            name: "delete_node",
+            description: "Delete a node from the current scene by its path.",
+            parameters: new
             {
                 type = "object",
                 properties = new
                 {
                     path = Prop("string", "Node path relative to scene root. E.g. 'Player' or 'Player/Sprite2D'")
                 },
-                required = new[] { "path" }
-            }),
+                required = new string[] { "path" }
+            }
+        ));
 
-        Tool("get_node_properties",
-            "Get all properties of a node so you can inspect or modify them.",
-            new
+        // -- Inspect a node's properties --
+        tools.Add(Tool(
+            name: "get_node_properties",
+            description: "Get all properties of a node so you can inspect or modify them.",
+            parameters: new
             {
                 type = "object",
                 properties = new
                 {
                     path = Prop("string", "Node path. E.g. 'Player' or 'Player/Sprite2D'")
                 },
-                required = new[] { "path" }
-            }),
+                required = new string[] { "path" }
+            }
+        ));
 
-        Tool("set_node_property",
-            "Set a property on a node. For Vector2 properties like position or scale, " +
-            "pass value as [x, y] array. For colors pass [r, g, b, a]. For strings pass a string. " +
-            "For booleans pass true/false.",
-            new
+        // -- Set a property on a node --
+        tools.Add(Tool(
+            name: "set_node_property",
+            description: "Set a property on a node. For Vector2 properties like position or scale, " +
+                         "pass value as [x, y] array. For colors pass [r, g, b, a]. For strings pass a string. " +
+                         "For booleans pass true/false.",
+            parameters: new
             {
                 type = "object",
                 properties = new
                 {
-                    path     = Prop("string", "Node path"),
+                    path = Prop("string", "Node path"),
                     property = Prop("string", "Property name. E.g. 'position', 'scale', 'visible', 'modulate'"),
-                    value    = new { description = "Value to set. Use [x,y] for Vector2, true/false for bool, number for float." }
+                    value = new { description = "Value to set. Use [x,y] for Vector2, true/false for bool, number for float." }
                 },
-                required = new[] { "path", "property", "value" }
-            }),
+                required = new string[] { "path", "property", "value" }
+            }
+        ));
 
-        Tool("save_scene",
-            "Save the currently open scene to disk.",
-            EmptyParams()),
+        // -- Save the current scene --
+        tools.Add(Tool(
+            name: "save_scene",
+            description: "Save the currently open scene to disk.",
+            parameters: EmptyParams()
+        ));
 
-        Tool("list_project_files",
-            "List all files in the Godot project. Useful for finding scenes, scripts, and assets.",
-            new
+        // -- List project files --
+        tools.Add(Tool(
+            name: "list_project_files",
+            description: "List all files in the Godot project. Useful for finding scenes, scripts, and assets.",
+            parameters: new
             {
                 type = "object",
                 properties = new
                 {
                     path = Prop("string", "Directory to list. Defaults to 'res://' (project root).")
                 }
-            }),
+            }
+        ));
 
-        Tool("create_new_scene",
-            "Create a brand-new Godot scene file (.tscn) on disk and immediately open it " +
-            "in the editor. Use this when the user asks to create a scene, level, or new " +
-            "screen. After calling this, the scene is open and you can call create_node " +
-            "to populate it.",
-            new
+        // -- Create a brand-new scene file --
+        tools.Add(Tool(
+            name: "create_new_scene",
+            description: "Create a brand-new Godot scene file (.tscn) on disk and immediately open it " +
+                         "in the editor. Use this when the user asks to create a scene, level, or new " +
+                         "screen. After calling this, the scene is open and you can call create_node " +
+                         "to populate it.",
+            parameters: new
             {
                 type = "object",
                 properties = new
@@ -160,13 +238,16 @@ public class GodotTools
                     root_name = Prop("string",
                         "Name for the root node. Defaults to the root_type if not given.")
                 },
-                required = new[] { "scene_path" }
-            }),
+                required = new string[] { "scene_path" }
+            }
+        ));
 
-        Tool("open_scene",
-            "Open an existing scene file in the Godot editor. " +
-            "Use list_project_files first to discover available scenes.",
-            new
+        // -- Open an existing scene --
+        tools.Add(Tool(
+            name: "open_scene",
+            description: "Open an existing scene file in the Godot editor. " +
+                         "Use list_project_files first to discover available scenes.",
+            parameters: new
             {
                 type = "object",
                 properties = new
@@ -174,118 +255,246 @@ public class GodotTools
                     scene_path = Prop("string",
                         "Full res:// path to the scene file. E.g. 'res://scenes/Main.tscn'.")
                 },
-                required = new[] { "scene_path" }
-            })
-    };
+                required = new string[] { "scene_path" }
+            }
+        ));
 
-    // ── Tool execution ────────────────────────────────────────────────────
-
-    public async Task<string> ExecuteAsync(string toolName, string argsJson)
-    {
-        var args = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(argsJson)
-                   ?? new();
-
-        return toolName switch
-        {
-            "ping_godot"           => await Call("ping", new { }),
-            "get_editor_state"     => await Call("get_editor_state", new { }),
-            "get_scene_tree"       => await Call("get_scene_tree", new { }),
-            "get_selected_nodes"   => await Call("get_selected_nodes", new { }),
-
-            "create_node" => await Call("create_node", new
-            {
-                node_type   = Str(args, "node_type", "Node"),
-                node_name   = Str(args, "node_name", Str(args, "node_type", "Node")),
-                parent_path = Str(args, "parent_path", "")
-            }),
-
-            "create_2d_node" => await Call("create_2d_node", new
-            {
-                node_type   = Str(args, "node_type", "Node2D"),
-                node_name   = Str(args, "node_name", Str(args, "node_type", "Node2D")),
-                parent_path = Str(args, "parent_path", ""),
-                position    = args.TryGetValue("position", out var posEl) ? (object)posEl : (object)null
-            }),
-
-            "delete_node" => await Call("delete_node", new
-            {
-                path = Str(args, "path", "")
-            }),
-
-            "get_node_properties" => await Call("get_node_properties", new
-            {
-                path = Str(args, "path", "")
-            }),
-
-            "set_node_property" => await Call("set_node_property", new
-            {
-                path     = Str(args, "path", ""),
-                property = Str(args, "property", ""),
-                value    = args.TryGetValue("value", out var v) ? (object)v : (object)""
-            }),
-
-            "save_scene"        => await Call("save_scene", new { }),
-
-            "list_project_files" => await Call("list_project_files", new
-            {
-                path = Str(args, "path", "res://")
-            }),
-
-            "create_new_scene" => await Call("create_new_scene", new
-            {
-                scene_path = Str(args, "scene_path", "res://new_scene.tscn"),
-                root_type  = Str(args, "root_type", "Node2D"),
-                root_name  = Str(args, "root_name", Str(args, "root_type", "Node2D"))
-            }),
-
-            "open_scene" => await Call("open_scene", new
-            {
-                scene_path = Str(args, "scene_path", "")
-            }),
-
-            _ => JsonSerializer.Serialize(new { error = $"Unknown tool: {toolName}" })
-        };
+        return tools;
     }
 
-    // ── HTTP call to McpHttpServer inside Godot ───────────────────────────
+    // =======================================================================
+    // ExecuteAsync — called by GroqAgent when the LLM wants to call a tool
+    //
+    // This method receives:
+    //   - toolName: e.g. "create_node"
+    //   - argsJson: a JSON string like '{"node_type":"Sprite2D","node_name":"Player"}'
+    //
+    // It parses the arguments, then sends an HTTP request to the local
+    // McpHttpServer (running on port 9876) which actually executes the tool.
+    // =======================================================================
+    public async Task<string> ExecuteAsync(string toolName, string argsJson)
+    {
+        // Parse the JSON arguments into a dictionary
+        Dictionary<string, JsonElement> args;
+        try
+        {
+            args = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(argsJson);
+        }
+        catch
+        {
+            args = new Dictionary<string, JsonElement>();
+        }
+        if (args == null)
+        {
+            args = new Dictionary<string, JsonElement>();
+        }
 
+        // Route each tool name to the correct HTTP call
+        // The first arg to Call() is the "action" that McpHttpServer.Dispatch() will match
+        // The second arg is the parameters object
+
+        if (toolName == "ping_godot")
+        {
+            return await Call("ping", new { });
+        }
+        else if (toolName == "get_editor_state")
+        {
+            return await Call("get_editor_state", new { });
+        }
+        else if (toolName == "get_scene_tree")
+        {
+            return await Call("get_scene_tree", new { });
+        }
+        else if (toolName == "get_selected_nodes")
+        {
+            return await Call("get_selected_nodes", new { });
+        }
+        else if (toolName == "create_node")
+        {
+            return await Call("create_node", new
+            {
+                node_type = Str(args, "node_type", "Node"),
+                node_name = Str(args, "node_name", Str(args, "node_type", "Node")),
+                parent_path = Str(args, "parent_path", "")
+            });
+        }
+        else if (toolName == "create_2d_node")
+        {
+            // For the position field, we need to pass the raw JsonElement (an array)
+            // instead of converting it to a string
+            object positionValue = null;
+            if (args.ContainsKey("position"))
+            {
+                positionValue = args["position"];
+            }
+
+            return await Call("create_2d_node", new
+            {
+                node_type = Str(args, "node_type", "Node2D"),
+                node_name = Str(args, "node_name", Str(args, "node_type", "Node2D")),
+                parent_path = Str(args, "parent_path", ""),
+                position = positionValue
+            });
+        }
+        else if (toolName == "delete_node")
+        {
+            return await Call("delete_node", new
+            {
+                path = Str(args, "path", "")
+            });
+        }
+        else if (toolName == "get_node_properties")
+        {
+            return await Call("get_node_properties", new
+            {
+                path = Str(args, "path", "")
+            });
+        }
+        else if (toolName == "set_node_property")
+        {
+            // For the value field, we need to pass the raw JsonElement
+            // because it could be a string, number, bool, or array
+            object valueArg = "";
+            if (args.ContainsKey("value"))
+            {
+                valueArg = args["value"];
+            }
+
+            return await Call("set_node_property", new
+            {
+                path = Str(args, "path", ""),
+                property = Str(args, "property", ""),
+                value = valueArg
+            });
+        }
+        else if (toolName == "save_scene")
+        {
+            return await Call("save_scene", new { });
+        }
+        else if (toolName == "list_project_files")
+        {
+            return await Call("list_project_files", new
+            {
+                path = Str(args, "path", "res://")
+            });
+        }
+        else if (toolName == "create_new_scene")
+        {
+            return await Call("create_new_scene", new
+            {
+                scene_path = Str(args, "scene_path", "res://new_scene.tscn"),
+                root_type = Str(args, "root_type", "Node2D"),
+                root_name = Str(args, "root_name", Str(args, "root_type", "Node2D"))
+            });
+        }
+        else if (toolName == "open_scene")
+        {
+            return await Call("open_scene", new
+            {
+                scene_path = Str(args, "scene_path", "")
+            });
+        }
+        else
+        {
+            // Unknown tool — return an error so the LLM knows it messed up
+            string errorJson = JsonSerializer.Serialize(new
+            {
+                error = "Unknown tool: " + toolName
+            });
+            return errorJson;
+        }
+    }
+
+    // =======================================================================
+    // Call — sends an HTTP POST to the local McpHttpServer
+    //
+    // The request body looks like:
+    // {
+    //   "action": "create_node",
+    //   "params": { "node_type": "Sprite2D", "node_name": "Player" }
+    // }
+    //
+    // McpHttpServer._Process() picks this up and Dispatch() routes it.
+    // =======================================================================
     private async Task<string> Call(string action, object parameters)
     {
         try
         {
-            var payload = JsonSerializer.Serialize(new
+            // Build the JSON payload
+            // Note: @params uses the @ symbol because "params" is a reserved
+            //       keyword in C# (used for the "params" array parameter feature)
+            string payload = JsonSerializer.Serialize(new
             {
-                action,
+                action = action,
                 @params = parameters
             });
-            var content = new StringContent(payload, Encoding.UTF8, "application/json");
-            var res = await _http.PostAsync(ServerUrl, content);
-            return await res.Content.ReadAsStringAsync();
+
+            // Send it to the local server
+            StringContent content = new StringContent(payload, Encoding.UTF8, "application/json");
+            HttpResponseMessage res = await _http.PostAsync(ServerUrl, content);
+            string responseBody = await res.Content.ReadAsStringAsync();
+            return responseBody;
         }
         catch (Exception ex)
         {
-            return JsonSerializer.Serialize(new
+            // If the server is unreachable, return a helpful error
+            // (this error goes back to the LLM, which explains it to the user)
+            string errorJson = JsonSerializer.Serialize(new
             {
-                error  = "Cannot reach Godot HTTP server",
+                error = "Cannot reach Godot HTTP server",
                 detail = ex.Message,
-                hint   = "Is the GodotMCP plugin enabled in Project Settings → Plugins?"
+                hint = "Is the GodotMCP plugin enabled in Project Settings > Plugins?"
             });
+            return errorJson;
         }
     }
 
-    // ── Schema helpers ────────────────────────────────────────────────────
+    // =======================================================================
+    // Schema helper methods — used by GetToolDefinitions() to build the
+    // tool schemas in the format the API expects
+    // =======================================================================
 
-    private static object Tool(string name, string description, object parameters) =>
-        new { type = "function", function = new { name, description, parameters } };
+    // Wraps a tool's info into the OpenAI function-tool format:
+    // { "type": "function", "function": { "name": ..., "description": ..., "parameters": ... } }
+    private static object Tool(string name, string description, object parameters)
+    {
+        var functionInfo = new { name = name, description = description, parameters = parameters };
+        var toolObject = new { type = "function", function = functionInfo };
+        return toolObject;
+    }
 
-    private static object Prop(string type, string description) =>
-        new { type, description };
+    // Creates a simple property descriptor: { "type": "string", "description": "..." }
+    // Used for parameters that are just strings
+    private static object Prop(string type, string description)
+    {
+        return new { type = type, description = description };
+    }
 
-    private static object EmptyParams() =>
-        new { type = "object", properties = new { } };
+    // Creates an empty parameters object: { "type": "object", "properties": {} }
+    // Used for tools that take no parameters (like ping_godot, save_scene)
+    private static object EmptyParams()
+    {
+        return new { type = "object", properties = new { } };
+    }
 
-    private static string Str(Dictionary<string, JsonElement> d, string key, string fallback) =>
-        d.TryGetValue(key, out var el) && el.ValueKind == JsonValueKind.String
-            ? el.GetString() ?? fallback : fallback;
+    // Safely reads a string value from the parsed JSON arguments.
+    // If the key doesn't exist or isn't a string, returns the fallback value.
+    //
+    // Example: Str(args, "node_type", "Node")
+    //   - If args has a string "node_type" key, returns that value
+    //   - Otherwise, returns "Node"
+    private static string Str(Dictionary<string, JsonElement> argsDict, string key, string fallback)
+    {
+        bool keyExists = argsDict.TryGetValue(key, out JsonElement element);
+        if (keyExists && element.ValueKind == JsonValueKind.String)
+        {
+            string value = element.GetString();
+            if (value != null)
+            {
+                return value;
+            }
+        }
+        return fallback;
+    }
 }
 #endif

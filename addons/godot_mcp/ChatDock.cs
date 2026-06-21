@@ -2,54 +2,82 @@
 using Godot;
 using System.Threading.Tasks;
 using System;
+using System.Collections.Generic;
 
 namespace GodotMCP;
+
+// ---------------------------------------------------------------------------
+// ChatDock — the UI panel that appears at the bottom of the Godot editor
+//
+// This is the only file that deals with UI. Everything else is logic.
+//
+// It does three things:
+//   1. Builds the chat interface (input box, output area, send button)
+//   2. When the user sends a message, passes it to GroqAgent.ChatAsync()
+//   3. Displays the agent's reply (and any tool calls it made)
+// ---------------------------------------------------------------------------
 
 [Tool]
 public partial class ChatDock : Control
 {
-    public McpHttpServer? Server { get; set; }
+    // A reference to the HTTP server (not used directly by ChatDock,
+    // but stored here so the plugin can wire things up)
+    public McpHttpServer Server { get; set; }
 
-    // UI handles
-    private RichTextLabel _output = null!;
-    private LineEdit _input = null!;
-    private Button _sendBtn = null!;
-    private Label _status = null!;
-    private Label _statusDot = null!;
-    private Button _clearBtn = null!;
+    // -- UI elements (created in BuildUi) ----------------------------------
+    private RichTextLabel _output;     // The scrollable text area showing the conversation
+    private LineEdit _input;           // The text input box where the user types
+    private Button _sendBtn;           // The "send" button
+    private Label _status;             // Status text (e.g. "ready", "thinking")
+    private Label _statusDot;          // The colored dot next to the status
+    private Button _clearBtn;          // The "clear" button
 
-    private GroqAgent? _agent;
-    private bool _waiting;
+    // -- State -------------------------------------------------------------
+    private GroqAgent _agent;          // The agent that talks to Groq
+    private bool _waiting;             // True while we're waiting for a response
 
-    // ── Color palette (muted, terminal-flavored) ───────────────────────────
-    private static readonly Color BgColor        = new(0.08f, 0.09f, 0.11f);   // near-black
-    private static readonly Color PanelBgColor   = new(0.11f, 0.12f, 0.14f);   // slightly lighter
-    private static readonly Color BorderColor    = new(0.20f, 0.22f, 0.26f);   // subtle separator
-    private static readonly Color FgColor        = new(0.85f, 0.87f, 0.90f);   // main text
-    private static readonly Color FgDimColor     = new(0.50f, 0.54f, 0.58f);   // dim labels
-    private static readonly Color UserRole       = new(0.55f, 0.78f, 1.00f);   // soft blue
-    private static readonly Color AiRole         = new(0.70f, 0.90f, 0.70f);   // soft green
-    private static readonly Color SysRole        = new(0.60f, 0.62f, 0.66f);   // gray
-    private static readonly Color ErrRole        = new(0.95f, 0.55f, 0.55f);   // muted red
-    private static readonly Color ToolRole       = new(0.85f, 0.78f, 0.50f);   // muted yellow
-    private static readonly Color AccentColor    = new(1.00f, 0.65f, 0.20f);   // orange (title)
-    private static readonly Color StatusOkColor  = new(0.40f, 0.75f, 0.45f);
-    private static readonly Color StatusBusyColor= new(0.90f, 0.78f, 0.30f);
-    private static readonly Color StatusErrColor = new(0.85f, 0.40f, 0.40f);
+    // -- Color palette (muted, terminal-flavored) --------------------------
+    // These are RGB values in the 0.0 to 1.0 range
+    private static readonly Color BgColor         = new Color(0.08f, 0.09f, 0.11f);   // near-black background
+    private static readonly Color PanelBgColor    = new Color(0.11f, 0.12f, 0.14f);   // slightly lighter panels
+    private static readonly Color BorderColor     = new Color(0.20f, 0.22f, 0.26f);   // subtle separators
+    private static readonly Color FgColor         = new Color(0.85f, 0.87f, 0.90f);   // main text color
+    private static readonly Color FgDimColor      = new Color(0.50f, 0.54f, 0.58f);   // dimmed text
+    private static readonly Color UserRoleColor   = new Color(0.55f, 0.78f, 1.00f);   // user messages (blue)
+    private static readonly Color AiRoleColor     = new Color(0.70f, 0.90f, 0.70f);   // AI replies (green)
+    private static readonly Color SysRoleColor    = new Color(0.60f, 0.62f, 0.66f);   // system messages (gray)
+    private static readonly Color ErrRoleColor    = new Color(0.95f, 0.55f, 0.55f);   // errors (red)
+    private static readonly Color ToolRoleColor   = new Color(0.85f, 0.78f, 0.50f);   // tool calls (yellow)
+    private static readonly Color AccentColor     = new Color(1.00f, 0.65f, 0.20f);   // title, prompt char (orange)
+    private static readonly Color StatusOkColor   = new Color(0.40f, 0.75f, 0.45f);   // "ready" status (green)
+    private static readonly Color StatusBusyColor = new Color(0.90f, 0.78f, 0.30f);   // "thinking" status (yellow)
+    private static readonly Color StatusErrColor  = new Color(0.85f, 0.40f, 0.40f);   // "error" status (red)
+
+    // -- Cached monospace font ----------------------------------------------
+    private static Font _monospaceFont;
+
+    // -----------------------------------------------------------------------
+    // _Ready — called by Godot when this node enters the scene tree
+    // -----------------------------------------------------------------------
 
     public override void _Ready()
     {
         BuildUi();
         TryInitAgent();
+
         AppendMessage("system", "godot-mcp ready. type a command or ask a question.");
         AppendMessage("system", "try: \"create a Node2D called Player at [200, 150]\"");
     }
+
+    // -----------------------------------------------------------------------
+    // TryInitAgent — create the GroqAgent (or show error if no API key)
+    // -----------------------------------------------------------------------
 
     private void TryInitAgent()
     {
         try
         {
-            var tools = new GodotTools();
+            GodotTools tools = new GodotTools();
             _agent = new GroqAgent(tools);
             SetStatus("ready", StatusOkColor);
         }
@@ -60,19 +88,25 @@ public partial class ChatDock : Control
         }
     }
 
-    // ── UI construction ─────────────────────────────────────────────────────
+    // =======================================================================
+    // UI CONSTRUCTION
+    //
+    // This builds the entire chat interface in code (no .tscn scene file).
+    // In Godot you can either build UI in the editor or in code — this
+    // plugin does it all in code so there are no extra files to manage.
+    // =======================================================================
+
     private void BuildUi()
     {
-        // Root: fill the dock
+        // -- Make the dock fill the entire panel area ----------------------
         SizeFlagsHorizontal = SizeFlags.ExpandFill;
         SizeFlagsVertical = SizeFlags.ExpandFill;
         AnchorRight = 1.0f;
         AnchorBottom = 1.0f;
         CustomMinimumSize = new Vector2(0, 240);
 
-        // Wrap everything in a PanelContainer so the dark background fills
-        // every pixel of the dock (no gaps between header / output / input).
-        var dockPanel = new PanelContainer
+        // -- Outer panel (dark background for the whole dock) ---------------
+        PanelContainer dockPanel = new PanelContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
@@ -82,8 +116,8 @@ public partial class ChatDock : Control
         dockPanel.AddThemeStyleboxOverride("panel", MakeStyle(BgColor, 0, BorderColor));
         AddChild(dockPanel);
 
-        // ── Root container ──
-        var root = new VBoxContainer
+        // -- Root layout (vertical: header / output / input) ----------------
+        VBoxContainer root = new VBoxContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
@@ -91,15 +125,17 @@ public partial class ChatDock : Control
         root.AddThemeConstantOverride("separation", 0);
         dockPanel.AddChild(root);
 
-        // ── Header bar (thin, single line) ──
-        var header = new HBoxContainer
+        // -- HEADER BAR ----------------------------------------------------
+        HBoxContainer header = new HBoxContainer
         {
             CustomMinimumSize = new Vector2(0, 28),
         };
         header.AddThemeConstantOverride("separation", 8);
         header.AddThemeStyleboxOverride("panel", MakeStyle(PanelBgColor, 0, BorderColor));
-        // Apply some left/right padding via margin container
-        var headerPad = new MarginContainer
+        root.AddChild(header);
+
+        // Padding inside the header
+        MarginContainer headerPad = new MarginContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
@@ -108,7 +144,8 @@ public partial class ChatDock : Control
         headerPad.AddThemeConstantOverride("margin_right", 10);
         header.AddChild(headerPad);
 
-        var headerInner = new HBoxContainer
+        // Inner horizontal layout for header contents
+        HBoxContainer headerInner = new HBoxContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
@@ -117,7 +154,8 @@ public partial class ChatDock : Control
         headerInner.Alignment = BoxContainer.AlignmentMode.Begin;
         headerPad.AddChild(headerInner);
 
-        var title = new Label
+        // Title: "godot-mcp"
+        Label title = new Label
         {
             Text = "godot-mcp",
             MouseFilter = MouseFilterEnum.Ignore,
@@ -128,7 +166,8 @@ public partial class ChatDock : Control
         title.VerticalAlignment = VerticalAlignment.Center;
         headerInner.AddChild(title);
 
-        var version = new Label
+        // Version: "v0.1.0"
+        Label version = new Label
         {
             Text = "v0.1.0",
             MouseFilter = MouseFilterEnum.Ignore,
@@ -139,13 +178,14 @@ public partial class ChatDock : Control
         version.VerticalAlignment = VerticalAlignment.Center;
         headerInner.AddChild(version);
 
-        var spacer = new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        // Spacer (pushes status to the right)
+        Control spacer = new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill };
         headerInner.AddChild(spacer);
 
-        // status dot + text
+        // Status dot (colored circle)
         _statusDot = new Label
         {
-            Text = "●",
+            Text = "\u25CF",  // Unicode filled circle ●
             MouseFilter = MouseFilterEnum.Ignore,
         };
         ApplyMonospaceFont(_statusDot);
@@ -154,6 +194,7 @@ public partial class ChatDock : Control
         _statusDot.VerticalAlignment = VerticalAlignment.Center;
         headerInner.AddChild(_statusDot);
 
+        // Status text
         _status = new Label
         {
             Text = "starting",
@@ -165,9 +206,11 @@ public partial class ChatDock : Control
         _status.VerticalAlignment = VerticalAlignment.Center;
         headerInner.AddChild(_status);
 
-        var headerSpacer2 = new Control { CustomMinimumSize = new Vector2(16, 0) };
-        headerInner.AddChild(headerSpacer2);
+        // Small spacer before the clear button
+        Control headerSpacer = new Control { CustomMinimumSize = new Vector2(16, 0) };
+        headerInner.AddChild(headerSpacer);
 
+        // Clear button
         _clearBtn = new Button
         {
             Text = "clear",
@@ -182,12 +225,10 @@ public partial class ChatDock : Control
         _clearBtn.Pressed += ClearChat;
         headerInner.AddChild(_clearBtn);
 
-        root.AddChild(header);
-
-        // Thin separator line
+        // -- SEPARATOR (thin line below header) -----------------------------
         root.AddChild(MakeSeparator());
 
-        // ── Output area ──
+        // -- OUTPUT AREA (scrollable text showing the conversation) ---------
         _output = new RichTextLabel
         {
             BbcodeEnabled = true,
@@ -200,15 +241,14 @@ public partial class ChatDock : Control
         _output.AddThemeColorOverride("selection_color", new Color(0.30f, 0.45f, 0.70f));
         _output.AddThemeStyleboxOverride("normal", MakeStyle(BgColor, 8, BgColor));
         _output.AddThemeStyleboxOverride("focus", MakeStyle(BgColor, 8, BgColor));
-        // Use the engine's monospace font
         _output.AddThemeFontOverride("normal_font", GetMonospaceFont());
         _output.AddThemeFontOverride("bold_font", GetMonospaceFont());
         _output.AddThemeFontOverride("mono_font", GetMonospaceFont());
         _output.AddThemeFontSizeOverride("normal_font_size", 12);
         _output.AddThemeConstantOverride("line_separation", 2);
 
-        // Wrap the output in a margin container for padding
-        var outputMargin = new MarginContainer
+        // Padding around the output text
+        MarginContainer outputMargin = new MarginContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
@@ -220,18 +260,18 @@ public partial class ChatDock : Control
         outputMargin.AddChild(_output);
         root.AddChild(outputMargin);
 
-        // Thin separator above input
+        // -- SEPARATOR (thin line above input) ------------------------------
         root.AddChild(MakeSeparator());
 
-        // ── Input row ──
-        var inputPanel = new PanelContainer
+        // -- INPUT ROW (text box + send button) ----------------------------
+        PanelContainer inputPanel = new PanelContainer
         {
             CustomMinimumSize = new Vector2(0, 36),
         };
         inputPanel.AddThemeStyleboxOverride("panel", MakeStyle(PanelBgColor, 0, BorderColor));
         root.AddChild(inputPanel);
 
-        var inputMargin = new MarginContainer
+        MarginContainer inputMargin = new MarginContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
@@ -242,7 +282,7 @@ public partial class ChatDock : Control
         inputMargin.AddThemeConstantOverride("margin_bottom", 4);
         inputPanel.AddChild(inputMargin);
 
-        var inputRow = new HBoxContainer
+        HBoxContainer inputRow = new HBoxContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
@@ -251,8 +291,8 @@ public partial class ChatDock : Control
         inputRow.Alignment = BoxContainer.AlignmentMode.Begin;
         inputMargin.AddChild(inputRow);
 
-        // > prompt prefix
-        var promptGlyph = new Label
+        // ">" prompt character
+        Label promptGlyph = new Label
         {
             Text = ">",
             MouseFilter = MouseFilterEnum.Ignore,
@@ -263,6 +303,7 @@ public partial class ChatDock : Control
         promptGlyph.VerticalAlignment = VerticalAlignment.Center;
         inputRow.AddChild(promptGlyph);
 
+        // Text input box
         _input = new LineEdit
         {
             PlaceholderText = "ask the agent to control godot...",
@@ -274,12 +315,18 @@ public partial class ChatDock : Control
         _input.AddThemeColorOverride("font_color", FgColor);
         _input.AddThemeColorOverride("font_placeholder_color", FgDimColor);
         _input.AddThemeColorOverride("caret_color", AccentColor);
-        _input.AddThemeStyleboxOverride("normal", MakeStyle(new Color(0, 0, 0, 0), 0, new Color(0, 0, 0, 0)));
-        _input.AddThemeStyleboxOverride("focus", MakeStyle(new Color(0, 0, 0, 0), 0, new Color(0, 0, 0, 0)));
-        _input.AddThemeStyleboxOverride("read_only", MakeStyle(new Color(0, 0, 0, 0), 0, new Color(0, 0, 0, 0)));
+
+        // Make the input box transparent (no visible border/background)
+        Color transparent = new Color(0, 0, 0, 0);
+        _input.AddThemeStyleboxOverride("normal", MakeStyle(transparent, 0, transparent));
+        _input.AddThemeStyleboxOverride("focus", MakeStyle(transparent, 0, transparent));
+        _input.AddThemeStyleboxOverride("read_only", MakeStyle(transparent, 0, transparent));
+
+        // When the user presses Enter in the input box, send the message
         _input.TextSubmitted += OnSend;
         inputRow.AddChild(_input);
 
+        // Send button
         _sendBtn = new Button
         {
             Text = "send",
@@ -295,32 +342,54 @@ public partial class ChatDock : Control
         _sendBtn.AddThemeStyleboxOverride("disabled", MakeStyle(PanelBgColor, 0, BorderColor));
         _sendBtn.AddThemeStyleboxOverride("focus", MakeStyle(PanelBgColor, 0, BorderColor));
         _sendBtn.AddThemeStyleboxOverride("pressed", MakeStyle(PanelBgColor, 0, AccentColor));
+
+        // When the send button is clicked, send the current input text
         _sendBtn.Pressed += () => OnSend(_input.Text);
         inputRow.AddChild(_sendBtn);
     }
 
-    // ── Sending ─────────────────────────────────────────────────────────────
+    // =======================================================================
+    // SENDING MESSAGES
+    // =======================================================================
+
+    // Called when the user presses Enter or clicks "send"
+    // The "async void" return type means this runs asynchronously but
+    // doesn't return a value. The UI stays responsive while waiting.
     private async void OnSend(string text)
     {
         text = text.Trim();
-        if (string.IsNullOrEmpty(text) || _waiting) return;
-        if (_agent == null)
+
+        // Don't send empty messages or send while already waiting
+        if (text == "" || _waiting)
         {
-            AppendMessage("error", "agent not initialized — check GROQ_API_KEY in .env");
             return;
         }
 
+        if (_agent == null)
+        {
+            AppendMessage("error", "agent not initialized - check GROQ_API_KEY in .env");
+            return;
+        }
+
+        // Clear the input box and show the user's message
         _input.Clear();
         AppendMessage("user", text);
         SetWaiting(true);
 
         try
         {
-            var result = await _agent.ChatAsync(text);
+            // Send the message to the agent and wait for a response
+            ChatResult result = await _agent.ChatAsync(text);
+
+            // Show the AI's reply
             AppendMessage("ai", result.Reply);
 
+            // If any tools were called, show which ones
             if (result.ToolsUsed.Count > 0)
-                AppendMessage("tool", "called: " + string.Join(", ", result.ToolsUsed));
+            {
+                string toolList = string.Join(", ", result.ToolsUsed);
+                AppendMessage("tool", "called: " + toolList);
+            }
 
             SetStatus("ready", StatusOkColor);
         }
@@ -331,51 +400,119 @@ public partial class ChatDock : Control
         }
         finally
         {
+            // Always re-enable the input, even if an error occurred
             SetWaiting(false);
         }
     }
 
-    // ── Message rendering ───────────────────────────────────────────────────
+    // =======================================================================
+    // MESSAGE DISPLAY
+    // =======================================================================
+
+    // Adds a message to the output area with color-coding by role
     private void AppendMessage(string role, string text)
     {
-        // Pick prefix + color per role. Prefix is short, lowercase, fixed-width.
-        var (prefix, color, isDim) = role switch
+        // Pick the prefix label and color based on the role
+        string prefix;
+        Color prefixColor;
+        bool isDim;
+
+        if (role == "user")
         {
-            "user"   => ("you",    UserRole,  false),
-            "ai"     => ("ai",     AiRole,    false),
-            "system" => ("sys",    SysRole,   true),
-            "error"  => ("err",    ErrRole,   false),
-            "tool"   => ("tool",   ToolRole,  true),
-            _        => (role,     FgColor,   false),
-        };
+            prefix = "you";
+            prefixColor = UserRoleColor;
+            isDim = false;
+        }
+        else if (role == "ai")
+        {
+            prefix = "ai";
+            prefixColor = AiRoleColor;
+            isDim = false;
+        }
+        else if (role == "system")
+        {
+            prefix = "sys";
+            prefixColor = SysRoleColor;
+            isDim = true;
+        }
+        else if (role == "error")
+        {
+            prefix = "err";
+            prefixColor = ErrRoleColor;
+            isDim = false;
+        }
+        else if (role == "tool")
+        {
+            prefix = "tool";
+            prefixColor = ToolRoleColor;
+            isDim = true;
+        }
+        else
+        {
+            prefix = role;
+            prefixColor = FgColor;
+            isDim = false;
+        }
 
-        // Escape BBCode. Newlines get a 2-space indent so wrapped lines
-        // line up under the message text (not under the prefix).
-        string safe = text.Replace("[", "[[").Replace("\n", "\n  ");
+        // Escape BBCode special characters ([ becomes [[)
+        // and add indentation after newlines so wrapped lines align
+        string safe = text.Replace("[", "[[");
+        safe = safe.Replace("\n", "\n  ");
 
-        string colorHex = ColorToHex(color);
-        Color bodyColor = isDim ? FgDimColor : FgColor;
+        // Convert the prefix color to hex (e.g. "#8CC8FF")
+        string prefixHex = ColorToHex(prefixColor);
 
-        // Render as:  <prefix>  <message text>
-        //             (wrapped lines indented by two spaces)
+        // Body text color: use dim color for system/tool messages, normal for others
+        Color bodyColor;
+        if (isDim)
+        {
+            bodyColor = FgDimColor;
+        }
+        else
+        {
+            bodyColor = FgColor;
+        }
+        string bodyHex = ColorToHex(bodyColor);
+
+        // Append to the output using BBCode markup
+        // Format: [color=#hex][b]prefix[/b][/color]  [color=#hex]message[/color]\n
         _output.AppendText(
-            $"[color={colorHex}][b]{prefix}[/b][/color]  " +
-            $"[color={ColorToHex(bodyColor)}]{safe}[/color]\n");
+            "[color=" + prefixHex + "][b]" + prefix + "[/b][/color]  " +
+            "[color=" + bodyHex + "]" + safe + "[/color]\n");
     }
 
-    private static string ColorToHex(Color c) =>
-        $"#{(int)(c.R * 255):X2}{(int)(c.G * 255):X2}{(int)(c.B * 255):X2}";
-
-    // ── State setters ───────────────────────────────────────────────────────
-    private void SetWaiting(bool val)
+    // Convert a Godot Color to a hex string like "#FF8C33"
+    private string ColorToHex(Color c)
     {
-        _waiting = val;
-        _sendBtn.Disabled = val;
-        _input.Editable = !val;
-        _sendBtn.Text = val ? "..." : "send";
-        if (val) SetStatus("thinking", StatusBusyColor);
+        int r = (int)(c.R * 255);
+        int g = (int)(c.G * 255);
+        int b = (int)(c.B * 255);
+        return "#" + r.ToString("X2") + g.ToString("X2") + b.ToString("X2");
     }
 
+    // =======================================================================
+    // STATE MANAGEMENT
+    // =======================================================================
+
+    // Enable/disable the input while waiting for a response
+    private void SetWaiting(bool waiting)
+    {
+        _waiting = waiting;
+        _sendBtn.Disabled = waiting;
+        _input.Editable = !waiting;
+
+        if (waiting)
+        {
+            _sendBtn.Text = "...";
+            SetStatus("thinking", StatusBusyColor);
+        }
+        else
+        {
+            _sendBtn.Text = "send";
+        }
+    }
+
+    // Update the status text and color in the header
     private void SetStatus(string text, Color color)
     {
         _status.Text = text;
@@ -383,59 +520,76 @@ public partial class ChatDock : Control
         _statusDot.AddThemeColorOverride("font_color", color);
     }
 
+    // Clear the chat output
     private void ClearChat()
     {
         _output.Clear();
         AppendMessage("system", "chat cleared.");
     }
 
-    // ── Font + stylebox helpers ─────────────────────────────────────────────
-    private static Font? _monospaceFont;
+    // =======================================================================
+    // FONT + STYLE HELPERS
+    // =======================================================================
+
+    // Get (or cache) the engine's default monospace font
     private Font GetMonospaceFont()
     {
-        if (_monospaceFont != null) return _monospaceFont;
-        // Try to load a monospace font from the engine's default theme
-        var font = GetThemeDefaultFont();
-        _monospaceFont = font;
-        return font;
+        if (_monospaceFont != null)
+        {
+            return _monospaceFont;
+        }
+
+        _monospaceFont = GetThemeDefaultFont();
+        return _monospaceFont;
     }
 
+    // Apply the monospace font to a Label, Button, or LineEdit
     private void ApplyMonospaceFont(Control node)
     {
-        // For Label / Button / LineEdit, overriding the default font works
+        Font monoFont = GetMonospaceFont();
+
         if (node is Label lbl)
-            lbl.AddThemeFontOverride("font", GetMonospaceFont());
+        {
+            lbl.AddThemeFontOverride("font", monoFont);
+        }
         else if (node is Button btn)
-            btn.AddThemeFontOverride("font", GetMonospaceFont());
+        {
+            btn.AddThemeFontOverride("font", monoFont);
+        }
         else if (node is LineEdit le)
-            le.AddThemeFontOverride("font", GetMonospaceFont());
+        {
+            le.AddThemeFontOverride("font", monoFont);
+        }
     }
 
-    private static StyleBoxFlat MakeStyle(Color bg, int borderWidth, Color borderColor)
+    // Create a flat style box (used for backgrounds and borders)
+    // borderWidth > 0 adds a bottom border; 0 means no border
+    private static StyleBoxFlat MakeStyle(Color bgColor, int borderWidth, Color borderColor)
     {
-        var sb = new StyleBoxFlat
-        {
-            BgColor = bg,
-            BorderWidthLeft = 0,
-            BorderWidthRight = 0,
-            BorderWidthTop = 0,
-            BorderWidthBottom = 0,
-            ContentMarginLeft = 0,
-            ContentMarginRight = 0,
-            ContentMarginTop = 0,
-            ContentMarginBottom = 0,
-        };
+        StyleBoxFlat sb = new StyleBoxFlat();
+        sb.BgColor = bgColor;
+        sb.BorderWidthLeft = 0;
+        sb.BorderWidthRight = 0;
+        sb.BorderWidthTop = 0;
+        sb.BorderWidthBottom = 0;
+        sb.ContentMarginLeft = 0;
+        sb.ContentMarginRight = 0;
+        sb.ContentMarginTop = 0;
+        sb.ContentMarginBottom = 0;
+
         if (borderWidth > 0)
         {
             sb.BorderWidthBottom = borderWidth;
             sb.BorderColor = borderColor;
         }
+
         return sb;
     }
 
+    // Create a thin horizontal separator line
     private static HSeparator MakeSeparator()
     {
-        var sep = new HSeparator
+        HSeparator sep = new HSeparator
         {
             CustomMinimumSize = new Vector2(0, 1),
         };

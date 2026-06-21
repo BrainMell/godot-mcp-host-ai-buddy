@@ -57,14 +57,15 @@ position `[x, y]` and moves the node there. Here are all 4 changes.
 
 ### 1. Add the tool definition
 
-Open `GodotTools.cs` and find `GetToolDefinitions()` (starts around line 18).
-Add your tool to the list:
+Open `GodotTools.cs` and find `GetToolDefinitions()` (starts around line 42).
+Add your tool to the list using the `tools.Add(Tool(...))` pattern:
 
 ```csharp
-Tool("move_node",
-    "Move a node to a new position. Works on Node2D and Control-derived nodes. " +
-    "For 3D nodes, use set_node_property with 'position' and a Vector3.",
-    new
+tools.Add(Tool(
+    name: "move_node",
+    description: "Move a node to a new position. Works on Node2D and Control-derived nodes. " +
+                 "For 3D nodes, use set_node_property with 'position' and a Vector3.",
+    parameters: new
     {
         type = "object",
         properties = new
@@ -77,11 +78,12 @@ Tool("move_node",
                 items = new { type = "number" }
             }
         },
-        required = new[] { "path", "position" }
-    }),
+        required = new string[] { "path", "position" }
+    }
+));
 ```
 
-**Schema helpers you can use** (already defined at the bottom of `GodotTools.cs`):
+**Schema helpers you can use** (defined at the bottom of `GodotTools.cs`):
 
 | Helper | What it returns |
 |--------|-----------------|
@@ -94,15 +96,24 @@ anonymous object like the `position` example above.
 
 ### 2. Add the dispatch case
 
-In the same file, find `ExecuteAsync()` (around line 150). Add a case to the
-`switch` expression:
+In the same file, find `ExecuteAsync()` (around line 200). Add an `else if`
+branch to the routing chain:
 
 ```csharp
-"move_node" => await Call("move_node", new
+else if (toolName == "move_node")
 {
-    path     = Str(args, "path", ""),
-    position = args.TryGetValue("position", out var posEl) ? (object)posEl : (object)null
-}),
+    object positionValue = null;
+    if (args.ContainsKey("position"))
+    {
+        positionValue = args["position"];
+    }
+
+    return await Call("move_node", new
+    {
+        path = Str(args, "path", ""),
+        position = positionValue
+    });
+}
 ```
 
 **Arg helpers** (defined at the bottom of `GodotTools.cs`):
@@ -110,7 +121,7 @@ In the same file, find `ExecuteAsync()` (around line 150). Add a case to the
 | Helper | Behavior |
 |--------|----------|
 | `Str(args, "key", "fallback")` | Reads a string arg, returns fallback if missing or non-string |
-| `args.TryGetValue("key", out var el)` | Use this for non-string args (arrays, numbers, bools) — passes the raw `JsonElement` through |
+| `args.TryGetValue("key", out var el)` | Use this for non-string args (arrays, numbers, bools) — check if the key exists, then pass the raw `JsonElement` |
 
 The `Call(action, params)` helper POSTs to the HTTP server inside Godot and
 returns the response as a string. You don't need to handle errors — `Call`
@@ -118,10 +129,14 @@ already returns a JSON error string if the server is unreachable.
 
 ### 3. Add the server-side dispatch case
 
-Open `McpHttpServer.cs` and find `Dispatch()` (around line 74). Add a case:
+Open `McpHttpServer.cs` and find `Dispatch()` (around line 160). Add an
+`else if` branch:
 
 ```csharp
-"move_node" => MoveNode(parameters),
+else if (action == "move_node")
+{
+    return MoveNode(parameters);
+}
 ```
 
 ### 4. Write the implementation method
@@ -132,38 +147,60 @@ implementations (after `Create2DNode` is a good spot):
 ```csharp
 private string MoveNode(JsonElement p)
 {
-    var root = EditorInterface.Singleton.GetEditedSceneRoot();
-    if (root == null) return Serialize(new { error = "No scene open" });
+    Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+    if (root == null)
+    {
+        return Serialize(new { error = "No scene open" });
+    }
 
     string path = GetStr(p, "path", "");
-    var node = root.GetNodeOrNull(path);
-    if (node == null) return Serialize(new { error = $"Node not found: {path}" });
-
-    if (!p.TryGetProperty("position", out var posEl) || posEl.ValueKind != JsonValueKind.Array)
-        return Serialize(new { error = "position must be a [x, y] array" });
-
-    var items = System.Linq.Enumerable.ToList(posEl.EnumerateArray());
-    if (items.Count < 2)
-        return Serialize(new { error = "position must have at least 2 elements [x, y]" });
-
-    var newPos = new Vector2(
-        (float)items[0].GetDouble(),
-        (float)items[1].GetDouble());
-
-    switch (node)
+    Node node = root.GetNodeOrNull(path);
+    if (node == null)
     {
-        case Node2D n2d:
-            n2d.Position = newPos;
-            break;
-        case Control ctrl:
-            ctrl.Position = newPos;
-            break;
-        default:
-            return Serialize(new
-            {
-                error = $"Node '{path}' (type {node.GetClass()}) does not have a 2D position. " +
-                        $"Use set_node_property for other node types."
-            });
+        return Serialize(new { error = "Node not found: " + path });
+    }
+
+    // Validate that "position" exists and is an array
+    if (!p.TryGetProperty("position", out JsonElement posEl))
+    {
+        return Serialize(new { error = "position must be a [x, y] array" });
+    }
+    if (posEl.ValueKind != JsonValueKind.Array)
+    {
+        return Serialize(new { error = "position must be a [x, y] array" });
+    }
+
+    // Read the [x, y] values
+    List<JsonElement> items = new List<JsonElement>();
+    foreach (JsonElement item in posEl.EnumerateArray())
+    {
+        items.Add(item);
+    }
+    if (items.Count < 2)
+    {
+        return Serialize(new { error = "position must have at least 2 elements [x, y]" });
+    }
+
+    float x = (float)items[0].GetDouble();
+    float y = (float)items[1].GetDouble();
+    Vector2 newPos = new Vector2(x, y);
+
+    // Apply the position based on node type
+    if (node is Node2D n2d)
+    {
+        n2d.Position = newPos;
+    }
+    else if (node is Control ctrl)
+    {
+        ctrl.Position = newPos;
+    }
+    else
+    {
+        return Serialize(new
+        {
+            error = "Node '" + path + "' (type " + node.GetClass() + ") does not have a 2D position. " +
+                    "Use set_node_property for other node types."
+        });
     }
 
     return Serialize(new
@@ -210,20 +247,31 @@ when a tool is called, `GroqAgent` logs `[GodotMCP] Tool call: move_node({...})`
 
 ### Tool with no parameters
 
+In `GetToolDefinitions()`:
 ```csharp
-Tool("get_fps",
-    "Get the current editor FPS.",
-    EmptyParams()),
+tools.Add(Tool(
+    name: "get_fps",
+    description: "Get the current editor FPS.",
+    parameters: EmptyParams()
+));
 ```
 
+In `ExecuteAsync()`:
 ```csharp
-"get_fps" => await Call("get_fps", new { }),
+else if (toolName == "get_fps")
+{
+    return await Call("get_fps", new { });
+}
 ```
 
+In `McpHttpServer.cs`:
 ```csharp
-"get_fps" => GetFps(),
+else if (action == "get_fps")
+{
+    return GetFps();
+}
 
-// ...
+// ... (later in the file)
 
 private string GetFps()
 {
@@ -238,19 +286,31 @@ The `Str()` helper only works for strings. For other types, read the
 
 ```csharp
 // In GodotTools.cs ExecuteAsync():
-"set_volume" => await Call("set_volume", new
+else if (toolName == "set_volume")
 {
-    volume = args.TryGetValue("volume", out var v) && v.ValueKind == JsonValueKind.Number
-        ? v.GetDouble()
-        : 1.0
-}),
+    double volume = 1.0;
+    if (args.TryGetValue("volume", out JsonElement vEl))
+    {
+        if (vEl.ValueKind == JsonValueKind.Number)
+        {
+            volume = vEl.GetDouble();
+        }
+    }
+
+    return await Call("set_volume", new { volume = volume });
+}
 ```
 
 ```csharp
 // In McpHttpServer.cs handler:
 double volume = 1.0;
-if (p.TryGetProperty("volume", out var vEl) && vEl.ValueKind == JsonValueKind.Number)
-    volume = vEl.GetDouble();
+if (p.TryGetProperty("volume", out JsonElement vEl))
+{
+    if (vEl.ValueKind == JsonValueKind.Number)
+    {
+        volume = vEl.GetDouble();
+    }
+}
 ```
 
 ### Tool that modifies the scene tree
@@ -272,7 +332,7 @@ something exotic (loading resources, importing), check the existing
 
 1. **The tool name in `GodotTools.cs` must match the action name in
    `McpHttpServer.cs`.** The `Call(action, params)` helper passes the first
-   argument as the `action` field in the HTTP body, and `Dispatch()` switches
+   argument as the `action` field in the HTTP body, and `Dispatch()` matches
    on that string. If they don't match, you'll get `Unknown action: ...`.
 
 2. **Don't forget `#if TOOLS` boundaries.** All four files already have
@@ -285,7 +345,7 @@ something exotic (loading resources, importing), check the existing
    anything that lives in 2D space." is good. Mention common use cases and
    constraints.
 
-4. **Required vs optional params.** In the JSON schema, `required = new[] { "path" }`
+4. **Required vs optional params.** In the JSON schema, `required = new string[] { "path" }`
    means the LLM must provide that param. Params not in `required` are
    optional — use `Str(args, "key", "default")` to handle their absence.
 
@@ -303,19 +363,19 @@ something exotic (loading resources, importing), check the existing
 
 | Tool | What it does | Where to look |
 |------|--------------|---------------|
-| `ping_godot` | Health check | `GodotTools.cs` ~line 20 |
-| `get_editor_state` | Is a scene open? What's it called? | ~line 24 |
-| `get_scene_tree` | Full node tree as JSON | ~line 28 |
-| `get_selected_nodes` | What's selected in the editor | ~line 32 |
-| `create_node` | Generic node creator (any type) | ~line 36 |
-| `create_2d_node` | 2D-specialized creator (Node2D + position) | ~line 57 |
-| `delete_node` | Remove a node | ~line 89 |
-| `get_node_properties` | Inspect all props on a node | ~line 99 |
-| `set_node_property` | Set a single prop (handles Vector2, bool, etc.) | ~line 111 |
-| `save_scene` | Save the current scene | ~line 126 |
-| `list_project_files` | Walk `res://` recursively | ~line 130 |
-| `create_new_scene` | Create a `.tscn` file and open it in the editor | ~line 143 |
-| `open_scene` | Open an existing scene by path | ~line 165 |
+| `ping_godot` | Health check | `GodotTools.cs` ~line 48 |
+| `get_editor_state` | Is a scene open? What's it called? | ~line 53 |
+| `get_scene_tree` | Full node tree as JSON | ~line 58 |
+| `get_selected_nodes` | What's selected in the editor | ~line 63 |
+| `create_node` | Generic node creator (any type) | ~line 68 |
+| `create_2d_node` | 2D-specialized creator (Node2D + position) | ~line 89 |
+| `delete_node` | Remove a node | ~line 122 |
+| `get_node_properties` | Inspect all props on a node | ~line 131 |
+| `set_node_property` | Set a single prop (handles Vector2, bool, etc.) | ~line 140 |
+| `save_scene` | Save the current scene | ~line 157 |
+| `list_project_files` | Walk `res://` recursively | ~line 163 |
+| `create_new_scene` | Create a `.tscn` file and open it in the editor | ~line 173 |
+| `open_scene` | Open an existing scene by path | ~line 191 |
 
 `create_2d_node` is the cleanest reference for a tool that has optional params,
 type validation, and returns a rich response — copy that pattern when in doubt.
