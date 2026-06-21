@@ -63,6 +63,7 @@ public class GroqAgent
                 "Get a free key at https://console.groq.com/keys");
 
         _http = new System.Net.Http.HttpClient();
+        _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
         _http.DefaultRequestHeaders.Add(AuthHeader, $"Bearer {apiKey}");
         _history.Add(new ApiMessage { Role = "system", Content = SystemPrompt });
     }
