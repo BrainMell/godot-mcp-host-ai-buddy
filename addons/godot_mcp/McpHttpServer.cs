@@ -24,7 +24,15 @@ public partial class McpHttpServer : Node
             GD.Print($"[GodotMCP] HTTP server listening on port {Port}");
     }
 
-    public void Stop() => _tcpServer.Stop();
+    public void Stop()
+    {
+        _tcpServer.Stop();
+        if (_client != null)
+        {
+            _client.DisconnectFromHost();
+            _client = null;
+        }
+    }
 
     public override void _Process(double delta)
     {
