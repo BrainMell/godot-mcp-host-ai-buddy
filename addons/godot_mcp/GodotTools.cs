@@ -54,6 +54,38 @@ public class GodotTools
                 required = new[] { "node_type" }
             }),
 
+        Tool("create_2d_node",
+            "Create a new 2D node in the current scene. Convenience wrapper around " +
+            "create_node specialized for 2D workflows: defaults to Node2D, accepts an " +
+            "optional initial position, and validates the type is a CanvasItem-derived " +
+            "2D class (Node2D, Sprite2D, CharacterBody2D, RigidBody2D, StaticBody2D, " +
+            "CollisionShape2D, Camera2D, Label, Button, etc.). Use this when the user " +
+            "asks for a 2D node, sprite, character, or anything that lives in 2D space.",
+            new
+            {
+                type = "object",
+                properties = new
+                {
+                    node_type = Prop("string",
+                        "2D node class name. Defaults to 'Node2D'. Must be a 2D type " +
+                        "(Node2D, Sprite2D, CharacterBody2D, RigidBody2D, StaticBody2D, " +
+                        "CollisionShape2D, Camera2D, Label, Button, etc.)."),
+                    node_name = Prop("string",
+                        "Name for the new node. Defaults to the node type if not given."),
+                    parent_path = Prop("string",
+                        "Path to parent node relative to scene root. Empty = add to root. " +
+                        "Example: 'Player' or 'World/Enemies'"),
+                    position = new
+                    {
+                        type = "array",
+                        description = "Initial position as [x, y] in pixels. Optional. " +
+                                      "Example: [100, 200].",
+                        items = new { type = "number" }
+                    }
+                },
+                required = new string[] { }
+            }),
+
         Tool("delete_node",
             "Delete a node from the current scene by its path.",
             new
@@ -129,6 +161,14 @@ public class GodotTools
                 node_type   = Str(args, "node_type", "Node"),
                 node_name   = Str(args, "node_name", Str(args, "node_type", "Node")),
                 parent_path = Str(args, "parent_path", "")
+            }),
+
+            "create_2d_node" => await Call("create_2d_node", new
+            {
+                node_type   = Str(args, "node_type", "Node2D"),
+                node_name   = Str(args, "node_name", Str(args, "node_type", "Node2D")),
+                parent_path = Str(args, "parent_path", ""),
+                position    = args.TryGetValue("position", out var posEl) ? (object)posEl : (object)null
             }),
 
             "delete_node" => await Call("delete_node", new

@@ -79,6 +79,7 @@ public partial class McpHttpServer : Node
             "get_scene_tree" => GetSceneTree(),
             "get_selected_nodes" => GetSelectedNodes(),
             "create_node" => CreateNode(parameters),
+            "create_2d_node" => Create2DNode(parameters),
             "delete_node" => DeleteNode(parameters),
             "set_node_property" => SetNodeProperty(parameters),
             "get_node_properties" => GetNodeProperties(parameters),
@@ -155,6 +156,89 @@ public partial class McpHttpServer : Node
             created = nodeName,
             type = nodeType,
             path = newNode.GetPath().ToString()
+        });
+    }
+
+    /// <summary>
+    /// Specialized creator for 2D nodes. Defaults to Node2D, validates that the
+    /// requested type is a CanvasItem-derived 2D class, and optionally sets the
+    /// initial position. The position is applied only if the instantiated node
+    /// is a Node2D (other 2D types like Label/Button inherit from Control and
+    /// use a different position property — for those, we skip silently rather
+    /// than error out).
+    /// </summary>
+    private string Create2DNode(JsonElement p)
+    {
+        var root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null) return Serialize(new { error = "No scene open. Create or open a scene first." });
+
+        string nodeType = GetStr(p, "node_type", "Node2D");
+        string nodeName = GetStr(p, "node_name", nodeType);
+        string parentPath = GetStr(p, "parent_path", "");
+
+        // Resolve parent
+        Node parent = root;
+        if (!string.IsNullOrEmpty(parentPath))
+        {
+            var found = root.GetNodeOrNull(parentPath);
+            if (found == null) return Serialize(new { error = $"Parent not found: {parentPath}" });
+            parent = found;
+        }
+
+        // Validate it's a 2D type: it must exist and inherit from CanvasItem
+        // (the common base for Node2D, Sprite2D, Control, Label, Button, etc.).
+        if (!ClassDB.ClassExists(nodeType))
+            return Serialize(new { error = $"Unknown node type: {nodeType}" });
+
+        if (!ClassDB.IsParentClass(nodeType, "CanvasItem"))
+            return Serialize(new
+            {
+                error = $"Type '{nodeType}' is not a 2D node. " +
+                        $"create_2d_node only accepts CanvasItem-derived classes " +
+                        $"(Node2D, Sprite2D, CharacterBody2D, Label, Button, etc.). " +
+                        $"Use create_node for non-2D types."
+            });
+
+        // Instantiate
+        var newNode = ClassDB.Instantiate(nodeType).As<Node>();
+        if (newNode == null) return Serialize(new { error = $"Failed to instantiate: {nodeType}" });
+
+        newNode.Name = nodeName;
+        parent.AddChild(newNode);
+        newNode.Owner = root;
+
+        // Apply initial position if provided AND the node is a Node2D
+        string? positionNote = null;
+        if (p.TryGetProperty("position", out var posEl) && posEl.ValueKind == JsonValueKind.Array)
+        {
+            var items = System.Linq.Enumerable.ToList(posEl.EnumerateArray());
+            if (items.Count >= 2 && newNode is Node2D n2d)
+            {
+                n2d.Position = new Vector2(
+                    (float)items[0].GetDouble(),
+                    (float)items[1].GetDouble());
+                positionNote = $"position=[{items[0].GetDouble()}, {items[1].GetDouble()}]";
+            }
+            else if (items.Count >= 2 && newNode is Control ctrl)
+            {
+                ctrl.Position = new Vector2(
+                    (float)items[0].GetDouble(),
+                    (float)items[1].GetDouble());
+                positionNote = $"position=[{items[0].GetDouble()}, {items[1].GetDouble()}]";
+            }
+            else
+            {
+                positionNote = "position ignored (node type does not expose a 2D position)";
+            }
+        }
+
+        return Serialize(new
+        {
+            created = nodeName,
+            type = nodeType,
+            path = newNode.GetPath().ToString(),
+            parent = parent.GetPath().ToString(),
+            position = positionNote ?? "default"
         });
     }
 
