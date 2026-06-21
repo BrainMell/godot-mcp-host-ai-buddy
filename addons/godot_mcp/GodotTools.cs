@@ -139,6 +139,42 @@ public class GodotTools
                 {
                     path = Prop("string", "Directory to list. Defaults to 'res://' (project root).")
                 }
+            }),
+
+        Tool("create_new_scene",
+            "Create a brand-new Godot scene file (.tscn) on disk and immediately open it " +
+            "in the editor. Use this when the user asks to create a scene, level, or new " +
+            "screen. After calling this, the scene is open and you can call create_node " +
+            "to populate it.",
+            new
+            {
+                type = "object",
+                properties = new
+                {
+                    scene_path = Prop("string",
+                        "Full res:// path for the new scene file. E.g. 'res://scenes/Main.tscn'. " +
+                        "Must end in .tscn."),
+                    root_type = Prop("string",
+                        "Node type for the scene root. Defaults to 'Node2D'. " +
+                        "Common choices: Node, Node2D, Node3D, Control."),
+                    root_name = Prop("string",
+                        "Name for the root node. Defaults to the root_type if not given.")
+                },
+                required = new[] { "scene_path" }
+            }),
+
+        Tool("open_scene",
+            "Open an existing scene file in the Godot editor. " +
+            "Use list_project_files first to discover available scenes.",
+            new
+            {
+                type = "object",
+                properties = new
+                {
+                    scene_path = Prop("string",
+                        "Full res:// path to the scene file. E.g. 'res://scenes/Main.tscn'.")
+                },
+                required = new[] { "scene_path" }
             })
     };
 
@@ -193,6 +229,18 @@ public class GodotTools
             "list_project_files" => await Call("list_project_files", new
             {
                 path = Str(args, "path", "res://")
+            }),
+
+            "create_new_scene" => await Call("create_new_scene", new
+            {
+                scene_path = Str(args, "scene_path", "res://new_scene.tscn"),
+                root_type  = Str(args, "root_type", "Node2D"),
+                root_name  = Str(args, "root_name", Str(args, "root_type", "Node2D"))
+            }),
+
+            "open_scene" => await Call("open_scene", new
+            {
+                scene_path = Str(args, "scene_path", "")
             }),
 
             _ => JsonSerializer.Serialize(new { error = $"Unknown tool: {toolName}" })
