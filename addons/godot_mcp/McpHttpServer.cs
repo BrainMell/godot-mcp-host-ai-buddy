@@ -156,10 +156,11 @@ public partial class McpHttpServer : Node
         try
         {
             // Parse the JSON body into a dictionary
-            Dictionary<string, JsonElement> request;
+            // Fully qualified because Godot also has a Dictionary class
+            System.Collections.Generic.Dictionary<string, JsonElement> request;
             try
             {
-                request = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body);
+                request = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, JsonElement>>(body);
             }
             catch
             {
@@ -605,7 +606,7 @@ public partial class McpHttpServer : Node
         // Iterate over all properties the node exposes
         // and build a dictionary of { property_name: value_as_string }
         Dictionary props = new Dictionary();
-        Godot.Collections.Array propertyList = node.GetPropertyList();
+        Godot.Collections.Array<Godot.Collections.Dictionary> propertyList = node.GetPropertyList();
 
         for (int i = 0; i < propertyList.Count; i++)
         {

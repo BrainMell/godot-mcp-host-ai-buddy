@@ -38,7 +38,9 @@ public class GroqAgent
     // -----------------------------------------------------------------------
 
     // The HTTP client used to talk to the Groq API
-    private HttpClient _http;
+    // Fully qualified as System.Net.Http.HttpClient because Godot also
+    // has a class called HttpClient and the compiler can't tell which one
+    private System.Net.Http.HttpClient _http;
 
     // GodotTools knows the tool schemas and how to execute them
     private GodotTools _tools;
@@ -99,7 +101,7 @@ public class GroqAgent
         }
 
         // Set up the HTTP client with the API key in the header
-        _http = new HttpClient();
+        _http = new System.Net.Http.HttpClient();
         _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
         _http.DefaultRequestHeaders.Add(AuthHeader, "Bearer " + apiKey);
 
