@@ -745,9 +745,9 @@ public partial class McpHttpServer : Node
     }
 
     // Build a minimal HTTP response with a JSON body
-    private static string HttpResponse(string body, int code)
+    private static string HttpResponse(string body, int code = 200)
     {
-        if (code == 0) code = 200;
+
         int byteCount = Encoding.UTF8.GetByteCount(body);
 
         return "HTTP/1.1 " + code + " OK\r\n" +

@@ -22,18 +22,24 @@ public partial class ChatDock : Control
 {
     // A reference to the HTTP server (not used directly by ChatDock,
     // but stored here so the plugin can wire things up)
-    public McpHttpServer Server { get; set; }
+    // The ? means this CAN be null (the plugin sets it after creating ChatDock)
+    public McpHttpServer? Server { get; set; }
 
     // -- UI elements (created in BuildUi) ----------------------------------
-    private RichTextLabel _output;     // The scrollable text area showing the conversation
-    private LineEdit _input;           // The text input box where the user types
-    private Button _sendBtn;           // The "send" button
-    private Label _status;             // Status text (e.g. "ready", "thinking")
-    private Label _statusDot;          // The colored dot next to the status
-    private Button _clearBtn;          // The "clear" button
+    // The "!" (null-forgiving operator) tells the compiler:
+    //   "I know this is null right now, but I WILL set it in BuildUi()
+    //    before anything else uses it. Trust me."
+    // Without this, the compiler would warn: "field not initialized"
+    private RichTextLabel _output = null!;
+    private LineEdit _input = null!;
+    private Button _sendBtn = null!;
+    private Label _status = null!;
+    private Label _statusDot = null!;
+    private Button _clearBtn = null!;
 
     // -- State -------------------------------------------------------------
-    private GroqAgent _agent;          // The agent that talks to Groq
+    // ? means this can be null (it's null if the API key wasn't found)
+    private GroqAgent? _agent;
     private bool _waiting;             // True while we're waiting for a response
 
     // -- Color palette (muted, terminal-flavored) --------------------------
@@ -54,7 +60,8 @@ public partial class ChatDock : Control
     private static readonly Color StatusErrColor  = new Color(0.85f, 0.40f, 0.40f);   // "error" status (red)
 
     // -- Cached monospace font ----------------------------------------------
-    private static Font _monospaceFont;
+    // ? because it's null until the first call to GetMonospaceFont()
+    private static Font? _monospaceFont;
 
     // -----------------------------------------------------------------------
     // _Ready — called by Godot when this node enters the scene tree
@@ -532,7 +539,7 @@ public partial class ChatDock : Control
     // =======================================================================
 
     // Get (or cache) the engine's default monospace font
-    private Font GetMonospaceFont()
+    private Font? GetMonospaceFont()
     {
         if (_monospaceFont != null)
         {

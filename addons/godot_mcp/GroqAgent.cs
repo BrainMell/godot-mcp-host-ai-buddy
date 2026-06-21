@@ -327,9 +327,16 @@ public class ApiChoice
 public class ApiMessage
 {
     public string Role { get; set; } = "";
-    public string Content { get; set; }
-    public List<ApiToolCall> ToolCalls { get; set; }
-    public string ToolCallId { get; set; }
+    // Content is nullable because:
+    //   - Tool result messages don't always have content
+    //   - The API sometimes omits it for assistant messages that only have tool_calls
+    public string? Content { get; set; }
+
+    // ToolCalls is nullable because only assistant messages have them
+    public List<ApiToolCall>? ToolCalls { get; set; }
+
+    // ToolCallId is nullable because only "tool" role messages have it
+    public string? ToolCallId { get; set; }
 
     // Converts this message into the format the API expects.
     // Different roles need different fields in the JSON.

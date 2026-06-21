@@ -21,10 +21,12 @@ namespace GodotMCP;
 public partial class GodotMcpPlugin : EditorPlugin
 {
     // The HTTP server that handles tool execution requests
-    private McpHttpServer _server;
+    // ? means these can be null (they're null before _EnterTree runs
+    // and after _ExitTree cleans up)
+    private McpHttpServer? _server;
 
     // The chat dock UI
-    private ChatDock _dock;
+    private ChatDock? _dock;
 
     // -----------------------------------------------------------------------
     // _EnterTree — called when the user enables the plugin
