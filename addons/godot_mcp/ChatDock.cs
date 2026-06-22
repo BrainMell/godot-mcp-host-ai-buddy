@@ -553,7 +553,7 @@ public partial class ChatDock : Control
     // Apply the monospace font to a Label, Button, or LineEdit
     private void ApplyMonospaceFont(Control node)
     {
-        Font monoFont = GetMonospaceFont();
+        Font? monoFont = GetMonospaceFont();
 
         if (node is Label lbl)
         {

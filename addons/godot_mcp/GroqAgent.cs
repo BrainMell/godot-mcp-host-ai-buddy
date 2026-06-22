@@ -53,7 +53,7 @@ public class GroqAgent
     // It gets inserted as the very first message in the history.
     private const string SystemPrompt =
         """
-        You are an AI assistant embedded inside the Godot 4 game engine editor.
+        You are an AI assistant embedded inside the Godot 4.6 game engine editor.
         You can inspect and control the editor through tools.
 
         Rules:
@@ -62,6 +62,8 @@ public class GroqAgent
         - Be concise. The user reads your reply in a small dock panel.
         - If a tool returns an error, explain it clearly and suggest a fix.
         - You can chain multiple tool calls to complete a task.
+        - If you don't know how to do something, admit it — don't make things up.
+        - Break Down the Users request into smaller steps and use multiple tool calls if needed to complete the task.
         """;
 
     // -----------------------------------------------------------------------
@@ -73,21 +75,13 @@ public class GroqAgent
         _history = new List<ApiMessage>();
 
         // Try to find the API key from the environment
-        string apiKey = System.Environment.GetEnvironmentVariable("GROQ_API_KEY");
-        if (apiKey == null)
-        {
-            apiKey = "";
-        }
+        string apiKey = System.Environment.GetEnvironmentVariable("GROQ_API_KEY") ?? "";
 
         // If not found in env, try loading a .env file from the project root
         if (apiKey == "")
         {
             DotNetEnv.Env.TraversePath().Load();
-            apiKey = System.Environment.GetEnvironmentVariable("GROQ_API_KEY");
-            if (apiKey == null)
-            {
-                apiKey = "";
-            }
+            apiKey = System.Environment.GetEnvironmentVariable("GROQ_API_KEY") ?? "";
         }
 
         // If still empty, we can't do anything — throw an error
@@ -149,11 +143,7 @@ public class GroqAgent
             // If no tool calls, the AI gave us a final text answer — we're done
             if (!hasToolCalls)
             {
-                string reply = msg.Content;
-                if (reply == null)
-                {
-                    reply = "";
-                }
+                string reply = msg.Content ?? "";
 
                 // Add the final reply to history
                 ApiMessage assistantMsg = new ApiMessage();
@@ -177,7 +167,7 @@ public class GroqAgent
             _history.Add(assistantWithTools);
 
             // -- Execute each tool call one by one
-            for (int t = 0; t < msg.ToolCalls.Count; t++)
+            for (int t = 0; t < msg.ToolCalls!.Count; t++)
             {
                 ApiToolCall tc = msg.ToolCalls[t];
 
@@ -295,7 +285,7 @@ public class GroqAgent
             PropertyNameCaseInsensitive = true  // "tool_call_id" matches ToolCallId
         };
 
-        ApiResponse apiResponse = JsonSerializer.Deserialize<ApiResponse>(responseText, deserializeOpts);
+        ApiResponse? apiResponse = JsonSerializer.Deserialize<ApiResponse>(responseText, deserializeOpts);
         if (apiResponse == null)
         {
             throw new Exception("Failed to deserialize API response");

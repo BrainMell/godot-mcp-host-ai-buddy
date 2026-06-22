@@ -31,12 +31,12 @@ namespace GodotMCP;
 public partial class McpHttpServer : Node
 {
     // The plugin that owns this server (needed for some editor operations)
-    public EditorPlugin EditorPlugin { get; set; }
+    public EditorPlugin? EditorPlugin { get; set; }
 
     // The TCP server that listens for connections
     private const int Port = 9876;
-    private TcpServer _tcpServer;
-    private StreamPeerTcp _client;
+    private TcpServer? _tcpServer;
+    private StreamPeerTcp? _client;
 
     public override void _Ready()
     {
@@ -50,7 +50,7 @@ public partial class McpHttpServer : Node
 
     public void Start()
     {
-        Error err = _tcpServer.Listen(Port);
+        Error err = _tcpServer!.Listen(Port);
         if (err != Error.Ok)
         {
             GD.PrintErr("[GodotMCP] Failed to listen on port " + Port + ": " + err);
@@ -63,7 +63,7 @@ public partial class McpHttpServer : Node
 
     public void Stop()
     {
-        _tcpServer.Stop();
+        _tcpServer!.Stop();
         if (_client != null)
         {
             _client.DisconnectFromHost();
@@ -82,7 +82,7 @@ public partial class McpHttpServer : Node
     public override void _Process(double delta)
     {
         // Check if a new client is trying to connect
-        if (_tcpServer.IsConnectionAvailable())
+        if (_tcpServer!.IsConnectionAvailable())
         {
             _client = _tcpServer.TakeConnection();
         }
@@ -157,14 +157,14 @@ public partial class McpHttpServer : Node
         {
             // Parse the JSON body into a dictionary
             // Fully qualified because Godot also has a Dictionary class
-            System.Collections.Generic.Dictionary<string, JsonElement> request;
+            System.Collections.Generic.Dictionary<string, JsonElement>? request;
             try
             {
                 request = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, JsonElement>>(body);
             }
             catch
             {
-                request = null;
+                request = default;
             }
 
             if (request == null)
@@ -179,8 +179,7 @@ public partial class McpHttpServer : Node
             {
                 if (actionElement.ValueKind == JsonValueKind.String)
                 {
-                    action = actionElement.GetString();
-                    if (action == null) action = "";
+                    action = actionElement.GetString() ?? "";
                 }
             }
 
@@ -725,7 +724,7 @@ public partial class McpHttpServer : Node
             {
                 if (v.ValueKind == JsonValueKind.String)
                 {
-                    string result = v.GetString();
+                    string? result = v.GetString();
                     if (result != null)
                     {
                         return result;

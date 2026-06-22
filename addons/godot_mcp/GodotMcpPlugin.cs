@@ -28,6 +28,9 @@ public partial class GodotMcpPlugin : EditorPlugin
     // The chat dock UI
     private ChatDock? _dock;
 
+    // The EditorDock wrapper used with the new AddDock API
+    private EditorDock? _editorDock;
+
     // -----------------------------------------------------------------------
     // _EnterTree — called when the user enables the plugin
     // -----------------------------------------------------------------------
@@ -46,7 +49,11 @@ public partial class GodotMcpPlugin : EditorPlugin
         //    AddControlToBottomPanel makes it appear alongside Output, Debug, etc.
         _dock = new ChatDock();
         _dock.Server = _server;
-        AddControlToBottomPanel(_dock, "AI Chat");
+        _editorDock = new EditorDock();
+        _editorDock.DefaultSlot = EditorDock.DockSlot.Bottom;
+        _editorDock.Name = "AI Chat";
+        _editorDock.AddChild(_dock);
+        AddDock(_editorDock);
 
         GD.Print("[GodotMCP] Plugin loaded. Chat dock ready.");
     }
@@ -58,10 +65,11 @@ public partial class GodotMcpPlugin : EditorPlugin
     public override void _ExitTree()
     {
         // Remove and destroy the chat dock
-        if (_dock != null)
+        if (_editorDock != null)
         {
-            RemoveControlFromBottomPanel(_dock);
-            _dock.QueueFree();   // Safely destroy the node
+            RemoveDock(_editorDock);
+            _editorDock.QueueFree();
+            _editorDock = null;
             _dock = null;
         }
 

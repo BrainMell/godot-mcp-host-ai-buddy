@@ -275,7 +275,7 @@ public class GodotTools
     public async Task<string> ExecuteAsync(string toolName, string argsJson)
     {
         // Parse the JSON arguments into a dictionary
-        Dictionary<string, JsonElement> args;
+        Dictionary<string, JsonElement>? args;
         try
         {
             args = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(argsJson);
@@ -322,7 +322,7 @@ public class GodotTools
         {
             // For the position field, we need to pass the raw JsonElement (an array)
             // instead of converting it to a string
-            object positionValue = null;
+            object? positionValue = null;
             if (args.ContainsKey("position"))
             {
                 positionValue = args["position"];
@@ -488,7 +488,7 @@ public class GodotTools
         bool keyExists = argsDict.TryGetValue(key, out JsonElement element);
         if (keyExists && element.ValueKind == JsonValueKind.String)
         {
-            string value = element.GetString();
+            string? value = element.GetString();
             if (value != null)
             {
                 return value;
