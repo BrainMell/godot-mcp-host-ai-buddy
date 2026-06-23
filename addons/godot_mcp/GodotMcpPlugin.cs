@@ -43,7 +43,7 @@ public partial class GodotMcpPlugin : EditorPlugin
         _server = new McpHttpServer();
         _server.EditorPlugin = this;
         AddChild(_server);     // Adding as a child means _Process() gets called
-        _server.Start();       // Start listening on port 9876
+        _server.Start();       // Start listening on port 9876 (or next available)
 
         // 2. Create the chat dock and add it to the bottom panel
         //    AddControlToBottomPanel makes it appear alongside Output, Debug, etc.

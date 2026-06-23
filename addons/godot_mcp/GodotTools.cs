@@ -25,13 +25,14 @@ namespace GodotMCP;
 public class GodotTools
 {
     // The HTTP server running inside Godot on the main thread
-    private const string ServerUrl = "http://localhost:9876/";
+    private readonly string _serverUrl;
 
     // An HTTP client used to talk to that local server
     private HttpClient _http;
 
-    public GodotTools()
+    public GodotTools(string serverUrl = "http://localhost:9876/")
     {
+        _serverUrl = serverUrl;
         _http = new HttpClient();
     }
 
@@ -431,7 +432,7 @@ public class GodotTools
 
             // Send it to the local server
             StringContent content = new StringContent(payload, Encoding.UTF8, "application/json");
-            HttpResponseMessage res = await _http.PostAsync(ServerUrl, content);
+            HttpResponseMessage res = await _http.PostAsync(_serverUrl, content);
             string responseBody = await res.Content.ReadAsStringAsync();
             return responseBody;
         }

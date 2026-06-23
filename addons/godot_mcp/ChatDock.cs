@@ -84,7 +84,9 @@ public partial class ChatDock : Control
     {
         try
         {
-            GodotTools tools = new GodotTools();
+            int port = Server?.Port ?? 9876;
+            string serverUrl = $"http://localhost:{port}/";
+            GodotTools tools = new GodotTools(serverUrl);
             _agent = new GroqAgent(tools);
             SetStatus("ready", StatusOkColor);
         }

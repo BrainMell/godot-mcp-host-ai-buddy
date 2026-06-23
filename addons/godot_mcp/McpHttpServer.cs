@@ -33,16 +33,14 @@ public partial class McpHttpServer : Node
     // The plugin that owns this server (needed for some editor operations)
     public EditorPlugin? EditorPlugin { get; set; }
 
+    // The actual port the server is listening on (set after Start() succeeds)
+    public int Port => _port;
+
     // The TCP server that listens for connections
-    private const int Port = 9876;
+    private const int PreferredPort = 9876;
+    private int _port = PreferredPort;
     private TcpServer? _tcpServer;
     private StreamPeerTcp? _client;
-
-    public override void _Ready()
-    {
-        _tcpServer = new TcpServer();
-        _client = null;
-    }
 
     // -----------------------------------------------------------------------
     // Start / Stop — called by GodotMcpPlugin when the plugin loads/unloads
@@ -50,20 +48,42 @@ public partial class McpHttpServer : Node
 
     public void Start()
     {
-        Error err = _tcpServer!.Listen(Port);
-        if (err != Error.Ok)
+        // Always create a fresh TcpServer here — field initializers on Godot
+        // Node subclasses tagged with [Tool] can be silently reset by the
+        // scripting bridge before _EnterTree runs, leaving the field null.
+        //
+        // NOTE: TcpServer.Listen() can throw a NullReferenceException from
+        // Godot's native layer when the port is already in use (e.g. from a
+        // prior crashed plugin load).  We catch that and try the next port.
+        for (int attempt = 0; attempt < 10; attempt++)
         {
-            GD.PrintErr("[GodotMCP] Failed to listen on port " + Port + ": " + err);
+            int candidatePort = PreferredPort + attempt;
+            try
+            {
+                _tcpServer = new TcpServer();
+                Error err = _tcpServer.Listen((ushort)candidatePort);
+                if (err == Error.Ok)
+                {
+                    _port = candidatePort;
+                    GD.Print("[GodotMCP] HTTP server listening on port " + _port);
+                    return;
+                }
+                GD.PrintErr("[GodotMCP] Port " + candidatePort + " unavailable (" + err + "), trying next…");
+                _tcpServer.Stop();
+            }
+            catch (System.Exception ex)
+            {
+                GD.PrintErr("[GodotMCP] Exception trying port " + candidatePort + ": " + ex.Message + " — trying next…");
+                try { _tcpServer?.Stop(); } catch { /* ignore */ }
+            }
         }
-        else
-        {
-            GD.Print("[GodotMCP] HTTP server listening on port " + Port);
-        }
+        GD.PrintErr("[GodotMCP] Could not bind to any port in range " + PreferredPort + "–" + (PreferredPort + 9) + ". Server not started.");
+        _tcpServer = null;
     }
 
     public void Stop()
     {
-        _tcpServer!.Stop();
+        _tcpServer?.Stop();
         if (_client != null)
         {
             _client.DisconnectFromHost();
@@ -81,8 +101,11 @@ public partial class McpHttpServer : Node
 
     public override void _Process(double delta)
     {
+        // If the server hasn't been started yet, do nothing
+        if (_tcpServer == null) return;
+
         // Check if a new client is trying to connect
-        if (_tcpServer!.IsConnectionAvailable())
+        if (_tcpServer.IsConnectionAvailable())
         {
             _client = _tcpServer.TakeConnection();
         }

@@ -328,6 +328,245 @@ something exotic (loading resources, importing), check the existing
 
 ---
 
+## Parameter Types and Property Editing Guide
+
+When defining tools in `GodotTools.cs`, you can specify different parameter types in the JSON schema. Here is a comprehensive reference for mapping JSON schema parameters to C# types on both the client (`GodotTools.cs`) and server (`McpHttpServer.cs`) sides.
+
+### 1. Schema Parameter Types Reference
+
+#### String
+- **Schema (`GodotTools.cs`):**
+  ```csharp
+  path = Prop("string", "Node path. E.g. 'Player'")
+  ```
+  *Or as an enum (restrict to predefined values):*
+  ```csharp
+  anchor = new { 
+      type = "string", 
+      @enum = new string[] { "top_left", "top_right", "bottom_left", "bottom_right" }, 
+      description = "Anchor preset location" 
+  }
+  ```
+- **Client Dispatch (`GodotTools.cs`):**
+  ```csharp
+  path = Str(args, "path", "")
+  ```
+- **Server Implementation (`McpHttpServer.cs`):**
+  ```csharp
+  string path = GetStr(p, "path", "");
+  ```
+
+#### Number / Integer
+- **Schema (`GodotTools.cs`):**
+  ```csharp
+  speed = Prop("number", "Movement speed multiplier")
+  // or
+  count = Prop("integer", "Number of nodes to spawn")
+  ```
+- **Client Dispatch (`GodotTools.cs`):**
+  ```csharp
+  double speed = 1.0;
+  if (args.TryGetValue("speed", out var speedEl) && speedEl.ValueKind == JsonValueKind.Number) {
+      speed = speedEl.GetDouble();
+  }
+  ```
+- **Server Implementation (`McpHttpServer.cs`):**
+  ```csharp
+  double speed = 1.0;
+  if (p.TryGetProperty("speed", out var speedEl) && speedEl.ValueKind == JsonValueKind.Number) {
+      speed = speedEl.GetDouble();
+  }
+  ```
+
+#### Boolean
+- **Schema (`GodotTools.cs`):**
+  ```csharp
+  visible = Prop("boolean", "Whether the node should be visible")
+  ```
+- **Client Dispatch (`GodotTools.cs`):**
+  ```csharp
+  bool visible = true;
+  if (args.TryGetValue("visible", out var visEl)) {
+      visible = visEl.ValueKind == JsonValueKind.True;
+  }
+  ```
+- **Server Implementation (`McpHttpServer.cs`):**
+  ```csharp
+  bool visible = true;
+  if (p.TryGetProperty("visible", out var visEl)) {
+      visible = visEl.ValueKind == JsonValueKind.True;
+  }
+  ```
+
+#### Array
+- **Schema (`GodotTools.cs`):**
+  ```csharp
+  tags = new { 
+      type = "array", 
+      items = new { type = "string" }, 
+      description = "List of node tags" 
+  }
+  ```
+- **Client Dispatch (`GodotTools.cs`):**
+  Pass the array object directly to the HTTP payload:
+  ```csharp
+  tags = args.ContainsKey("tags") ? args["tags"] : null
+  ```
+- **Server Implementation (`McpHttpServer.cs`):**
+  Iterate over the array elements:
+  ```csharp
+  if (p.TryGetProperty("tags", out JsonElement tagsEl) && tagsEl.ValueKind == JsonValueKind.Array) {
+      foreach (JsonElement tagEl in tagsEl.EnumerateArray()) {
+          string tag = tagEl.GetString() ?? "";
+      }
+  }
+  ```
+
+---
+
+### 2. Handling Positions and Vectors
+
+Positions are normally passed as JSON number arrays (e.g., `[x, y]` for 2D, or `[x, y, z]` for 3D).
+
+#### Vector2 (2D Positions)
+- **Schema (`GodotTools.cs`):**
+  ```csharp
+  position = new {
+      type = "array",
+      items = new { type = "number" },
+      description = "2D coordinates as [x, y]"
+  }
+  ```
+- **Client Dispatch (`GodotTools.cs`):**
+  ```csharp
+  position = args.ContainsKey("position") ? args["position"] : null
+  ```
+- **Server Parse Helper (`McpHttpServer.cs`):**
+  ```csharp
+  private Vector2 ParseVector2(JsonElement arr)
+  {
+      List<JsonElement> items = new List<JsonElement>();
+      foreach (JsonElement item in arr.EnumerateArray()) {
+          items.Add(item);
+      }
+      if (items.Count >= 2) {
+          float x = (float)items[0].GetDouble();
+          float y = (float)items[1].GetDouble();
+          return new Vector2(x, y);
+      }
+      return Vector2.Zero;
+  }
+  ```
+
+#### Vector3 (3D Positions)
+- **Schema (`GodotTools.cs`):**
+  ```csharp
+  position_3d = new {
+      type = "array",
+      items = new { type = "number" },
+      description = "3D coordinates as [x, y, z]"
+  }
+  ```
+- **Client Dispatch (`GodotTools.cs`):**
+  ```csharp
+  position_3d = args.ContainsKey("position_3d") ? args["position_3d"] : null
+  ```
+- **Server Parse Helper (`McpHttpServer.cs`):**
+  ```csharp
+  private Vector3 ParseVector3(JsonElement arr)
+  {
+      List<JsonElement> items = new List<JsonElement>();
+      foreach (JsonElement item in arr.EnumerateArray()) {
+          items.Add(item);
+      }
+      if (items.Count >= 3) {
+          float x = (float)items[0].GetDouble();
+          float y = (float)items[1].GetDouble();
+          float z = (float)items[2].GetDouble();
+          return new Vector3(x, y, z);
+      }
+      return Vector3.Zero;
+  }
+  ```
+
+---
+
+### 3. Editing Node Properties
+
+Godot properties are set dynamically using `node.Set(propertyName, variantValue)`.
+
+#### The Generic Property Setter Pattern
+You can implement a tool that allows general property modifications by translating incoming JSON types to Godot `Variant` types. Here is the pattern used in `set_node_property`:
+
+1. **Check value JSON type:** Use `ValueKind` to differentiate JSON types.
+2. **Convert to C# type:** Map JSON booleans/numbers/strings directly, and arrays to `Vector2` / `Vector3` / `Color`.
+3. **Apply via `node.Set()`:** Godot's C# API allows assigning native types directly to `Variant` structs.
+
+```csharp
+private string SetNodeProperty(JsonElement p)
+{
+    // ... load node path ...
+    if (p.TryGetProperty("value", out JsonElement val)) {
+        Variant godotVal;
+
+        if (val.ValueKind == JsonValueKind.True) {
+            godotVal = true;
+        }
+        else if (val.ValueKind == JsonValueKind.False) {
+            godotVal = false;
+        }
+        else if (val.ValueKind == JsonValueKind.Number) {
+            godotVal = val.GetDouble();
+        }
+        else if (val.ValueKind == JsonValueKind.String) {
+            godotVal = val.GetString() ?? "";
+        }
+        else if (val.ValueKind == JsonValueKind.Array) {
+            // Translate arrays into Vector2 (or Color/Vector3 depending on property length)
+            godotVal = ParseVector2(val);
+        }
+        else {
+            godotVal = "";
+        }
+
+        node.Set(property, godotVal);
+    }
+    return Serialize(new { set = property, node = path });
+}
+```
+
+#### Color Properties
+If you need to edit color properties (like modulation or light colors), pass them as `[r, g, b, a]` or `[r, g, b]` arrays (values ranging `0.0` to `1.0`):
+
+- **Schema:**
+  ```csharp
+  color = new {
+      type = "array",
+      items = new { type = "number" },
+      description = "Color as [r, g, b, a] or [r, g, b]"
+  }
+  ```
+- **Server Parser:**
+  ```csharp
+  private Color ParseColor(JsonElement arr)
+  {
+      List<float> c = new List<float>();
+      foreach (JsonElement el in arr.EnumerateArray()) {
+          c.Add((float)el.GetDouble());
+      }
+      if (c.Count == 3) {
+          return new Color(c[0], c[1], c[2]);
+      }
+      if (c.Count >= 4) {
+          return new Color(c[0], c[1], c[2], c[3]);
+      }
+      return Colors.White; // fallback
+  }
+  ```
+
+---
+
+
 ## Gotchas
 
 1. **The tool name in `GodotTools.cs` must match the action name in
