@@ -1,135 +1,293 @@
-# GodotMCP Host AI Buddy
+# godot-mcp-host-ai-buddy
 
-A Godot 4 editor plugin that lets you control the Godot editor through natural language using browser-driven Google Gemini. Type in the chat dock, and the AI calls real editor APIs — creating scenes, adding nodes, setting properties — right in front of you.
+A Godot 4 editor plugin that gives an AI agent (Gemini, ChatGPT, or Zai) **direct control over the Godot editor** — creating nodes, editing properties, managing scenes, assigning textures, and running shell commands — all from a chat dock inside Godot itself.
 
----
-
-## Quick start
-
-1. Clone this repo and open it in Godot 4.
-2. Build the C# solution in the editor or run `dotnet build` in the root folder.
-3. Enable the plugin: **Project → Project Settings → Plugins → GodotMCP → Enable**.
-4. The first time you send a message, a headed Chromium window will open:
-   - **Log into your Google account** on the Gemini page.
-   - Once signed in and you see the chat interface, close the browser or return to Godot.
-   - All subsequent prompts will run in **stealth headless mode** in the background, utilizing your saved session profile.
-5. The **AI Buddy** dock appears at the bottom of the editor — start chatting!
+No API key required. The plugin reuses your saved browser session via Playwright.
 
 ---
 
-## How it works
-
-The plugin has three moving parts that talk to each other in a loop:
+## How it Works
 
 ```
-You type in the ChatDock
-        │
-        ▼
-┌─────────────────────────────────────────────────────────────┐
-│  ChatDock.cs (Orchestrator)                                 │
-│                                                             │
-│  1. Primes the session on first run with the system prompt   │
-│     and available tools schema.                             │
-│  2. Sends user prompts and loops tool results.              │
-└──────────────────────────┬──────────────────────────────────┘
-                           │  SendMessageAsync()
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  AgentWrapper.cs (ChatService)                              │
-│                                                             │
-│  3. Automates a Chromium instance via Playwright.           │
-│  4. Enters stealth headless mode after initial login.       │
-│  5. Inputs prompts into Gemini and extracts streamed replies.│
-└──────────────────────────┬──────────────────────────────────┘
-                           │  Browser UI Automation
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Google Gemini Web App (LLM)                                │
-│                                                             │
-│  6. Receives instructions and decides to trigger a tool.    │
-│  7. Returns array-wrapped JSON like:                        │
-│     [CALL]                                                  │
-│       {"tool": "create_new_scene", "root_name": "Player"}   │
-│     [/CALL]                                                 │
-└──────────────────────────┬──────────────────────────────────┘
-                           │  Raw reply parsed via Regex
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  GodotTools.cs (Schema + HTTP Client)                       │
-│                                                             │
-│  8. Matches the `[CALL]` block and deserializes arguments.  │
-│  9. Sends tool call HTTP request to localhost:9876.         │
-└──────────────────────────┬──────────────────────────────────┘
-                           │  HTTP POST → localhost:9876
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  McpHttpServer.cs (Main Godot Thread Server)                │
-│                                                             │
-│  10. Receives request and dispatches to Godot's API.        │
-│  11. Executes the actual editor changes (e.g. adding node). │
-│  12. Returns the result JSON back to the ChatDock loop.     │
-└──────────────────────────┬──────────────────────────────────┘
-                           │  Loops result back as [RESULT]
-                           ▼
-                       (Repeat)
+You type a message
+      ↓
+ChatDock.cs  →  AgentWrapper.cs (Playwright browser)
+                      ↓
+              Gemini / ChatGPT / Zai (web UI)
+                      ↓
+         AI responds with [CALL]{...}[/CALL]
+                      ↓
+           GodotTools.cs parses the JSON
+                      ↓
+     HTTP POST → McpHttpServer.cs (main thread)
+                      ↓
+        Godot editor API executes the command
+                      ↓
+         [RESULT]{...}[/RESULT] sent back to AI
+                      ↓
+         AI continues or summarises in chat
 ```
 
----
-
-## File responsibilities
-
-| File | Role |
-|------|------|
-| [ChatDock.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/ChatDock.cs) | **UI & Loop Orchestrator.** Handles the input/output message logs, manages multi-turn agent logic, primes Gemini with system prompt definitions, parses `[CALL]` blocks, and runs tools. |
-| [AgentWrapper.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/AgentWrapper.cs) | **Browser Controller.** Interfaces with Playwright. Handles stealth headless configurations, viewport setup, session persistence, login verification, and message sending. |
-| [GodotTools.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/GodotTools.cs) | **Schema + HTTP Router.** Defines the schemas of all Godot editor tools that the AI can call. Standardizes outgoing HTTP requests to the main thread server. |
-| [McpHttpServer.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/McpHttpServer.cs) | **Actual Implementations.** Runs a TCP server on port 9876 on Godot's main thread. Modifies the scene tree and executes EditorInterface calls safely. |
-| [GodotMcpPlugin.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/GodotMcpPlugin.cs) | **Plugin Entry Point.** Initializes the HTTP server and mounts the chat dock panel on editor startup, cleaning them up on exit. |
+### Why HTTP?
+Godot's editor APIs (SceneTree, EditorInterface, node manipulation) are **not thread-safe**. The Playwright browser runs async. The solution: a tiny HTTP server (`McpHttpServer`) running on `localhost:9876` that receives requests and processes them on Godot's main thread inside `_Process()`.
 
 ---
 
-## Tool Execution Loop
+## Setup
 
-The AI automatically chooses between two modes of operation:
-- **Conversational Mode**: For general advice, game design explanations, and questions. The AI replies in clean markdown.
-- **Action Mode**: For modifying the scene or checking files. The AI outputs a single `[CALL]...[/CALL]` JSON block.
-  - The loop automatically runs the tool, retrieves the output, and feeds it back as `[RESULT]...[/RESULT]`.
-  - The loop runs up to 10 consecutive times so the AI can execute complex chains of actions (like creating a scene, adding multiple nodes, and saving) in one go.
+### Prerequisites
+- Godot 4.x with .NET (C#) support
+- .NET 8 SDK
+- A Google account signed in to [gemini.google.com](https://gemini.google.com) (or ChatGPT / Zai)
 
----
+### Install
+1. Clone this repo into your Godot project's root (or alongside it)
+2. Enable the plugin: **Project → Project Settings → Plugins → GodotMCP → Enable**
+3. Build: click **Build** in the top-right of the Godot editor, or run `dotnet build`
+4. The **godot-mcp** chat dock appears at the bottom of the editor
 
-## Features
-
-- **No API Keys Needed**: Reuses your standard logged-in Google browser session on Gemini.
-- **Stealth Headless Mode**: Runs silently in the background after initial setup.
-- **Assembly Reload Tolerant**: Implements active cancellation tokens and strict process cleanup on plugin unload to prevent Godot from hanging when compiling.
-- **Copy Log**: Instant one-click clipboard copying of the chat log (automatically stripping BBCode formatting).
-- **Session Priming**: System instructions and schemas are sent once at the start of a conversation, keeping subsequent user prompts lightweight and fast.
+### First Run
+The plugin opens a persistent Chromium browser window using your saved login session. If you're not signed in, it will navigate to the login page — sign in once and it persists.
 
 ---
 
-## Available tools
+## Chat UI
 
-| Tool | What it does |
-|------|--------------|
-| `ping_godot` | Health check — is the server responding? |
-| `get_editor_state` | Retrieves open scene name and path. |
-| `get_scene_tree` | Lists the entire node hierarchy of the active scene. |
-| `get_selected_nodes` | Tells which nodes are currently highlighted. |
-| `create_node` | Generates a new node of any Type in the scene. |
-| `create_2d_node` | Utility helper to instantiate 2D nodes at coordinates. |
-| `delete_node` | Frees a node by its path. |
-| `get_node_properties` | Inspects properties on a selected node. |
-| `set_node_property` | Edits properties (Vector2, floats, strings, booleans). |
-| `save_scene` | Saves current scene changes. |
-| `list_project_files` | Scans directories under `res://`. |
-| `create_new_scene` | Builds a new scene with root type and opens it. |
-| `open_scene` | Switches the editor to open a different scene file. |
+### Roles / Prefixes
+| Prefix | Meaning |
+|---|---|
+| `💻` / `sys` | System messages (plugin status, hints) |
+| `🧔` / `you` | Your messages |
+| `🤖` / `ai` | AI responses |
+| `🔧` / `tool` | Tool call logs (truncated for readability; full output in Godot Output panel) |
+| `err` | Errors |
+
+### Slash Commands
+| Command | What it does |
+|---|---|
+| `/clear` | Clear chat and start a fresh AI session |
+| `/copy` | Copy full chat log to clipboard |
+| `/model <name>` | Switch between `gemini`, `Chatgpt`, `Zai` |
+| `/help` | Show available commands |
+
+### Customising Prefixes / Colors
+Edit `AppendMessage()` in [`ChatDock.cs`](addons/godot_mcp/ChatDock.cs) — each role maps to a prefix string and a `Color`. Change the strings to whatever you want (emoji, words, etc.).
+
+### Adding Slash Commands
+In `OnSend(string text)` in [`ChatDock.cs`](addons/godot_mcp/ChatDock.cs), intercept at the top of the method before the AI send logic:
+
+```csharp
+if (text.StartsWith("/mycommand"))
+{
+    AppendMessage("system", "did the thing!");
+    _input.Clear();
+    return; // stops it from going to the AI
+}
+```
+
+### Truncating Long Tool Output
+Tool output is truncated in the chat UI via `Truncate(string s, int maxLen)` in [`ChatDock.cs`](addons/godot_mcp/ChatDock.cs). Change the `120` (args) and `200` (result) limits in `OnSend()` to whatever you like. Full output always goes to Godot's **Output** panel.
 
 ---
 
-## Tech stack
+## Available Tools
 
-- **Godot 4** (C# / .NET 8+)
-- **Playwright for .NET** (Chromium browser controller)
-- **Google Gemini Web App** (Free-tier web interface)
+The AI picks which tool to call based on your request. You can see all tool definitions in [`GodotTools.cs`](addons/godot_mcp/GodotTools.cs).
+
+### Scene Management
+
+| Tool | Description |
+|---|---|
+| `get_editor_state` | Is a scene open? Returns name and `res://` path |
+| `create_new_scene` | Creates a new `.tscn` file and opens it in the editor |
+| `open_scene` | Opens an existing `.tscn` file |
+| `save_scene` | Saves the current scene to disk |
+
+**Example prompts:**
+- *"Create a new 2D scene called Player"*
+- *"Open the scene at res://levels/Level1.tscn"*
+- *"Save the scene"*
+
+---
+
+### Node Inspection
+
+| Tool | Description |
+|---|---|
+| `get_scene_tree` | Returns the full node hierarchy with types and paths |
+| `get_selected_nodes` | Returns currently selected nodes in the editor |
+| `get_node_properties` | Returns ALL properties a node exposes, with type, hint, valid enum values, ranges, and current value |
+
+**`get_node_properties` returns rich metadata per property:**
+```json
+{
+  "name": "process_mode",
+  "type": "Int",
+  "hint": "Enum",
+  "hint_string": "Inherit,Always,Pausable,WhenPaused,Always,Disabled",
+  "value": "0"
+}
+```
+This tells the AI exactly what values are valid — the AI should call this before `set_node_property` if it's unsure about a property.
+
+---
+
+### Node Creation
+
+| Tool | Description |
+|---|---|
+| `create_node` | Create any Godot node by class name |
+| `create_2d_node` | Create a 2D node (validates it's a CanvasItem subclass) with optional position |
+
+**Any valid Godot class works** — `ClassDB.Instantiate()` handles the lookup internally. You're not limited to a list.
+
+**Example prompts:**
+- *"Add a CharacterBody2D called Player"*
+- *"Create a Sprite2D called Background at [0, 0]"*
+- *"Add a CollisionShape2D as a child of Player"*
+
+**Node paths:** After creation, nodes are referred to by their **scene-relative path** (e.g. `Player`, `Player/Sprite2D`, `World/Enemies/Goblin`). The root node can be referred to by its name (e.g. `Character`) or left blank.
+
+---
+
+### Node Editing
+
+| Tool | Description |
+|---|---|
+| `delete_node` | Delete a node by path |
+| `set_node_property` | Set any property on a node — type-aware |
+
+**`set_node_property` supports all Godot property types:**
+
+| Property type | How to pass the value |
+|---|---|
+| `bool` | `true` or `false` |
+| `int` / `float` | Number: `42`, `1.5` |
+| `string` | String: `"hello"` |
+| `Vector2` | Array: `[x, y]` e.g. `[100, 200]` |
+| `Vector3` | Array: `[x, y, z]` |
+| `Color` | Array `[r, g, b]` or `[r, g, b, a]` (0–1 range), or hex string `"#FF8833"` |
+| `Rect2` | Array: `[x, y, width, height]` |
+| `Enum` | Integer value (check `get_node_properties` hint_string for names→ints) |
+| `NodePath` | String path |
+
+**Example prompts:**
+- *"Move player_head to position [200, 150]"*
+- *"Set the modulate color of Background to red"*
+- *"Hide the player_body node"*
+- *"Set the scale of Player to [2, 2]"*
+
+---
+
+### Textures & Assets
+
+| Tool | Description |
+|---|---|
+| `set_sprite_texture` | Assign an image as the texture of a Sprite2D node |
+
+`image_path` can be:
+- A `res://` path already inside the project: `"res://assets/hero.png"`
+- An **absolute OS path** anywhere on your computer: `"/home/user/Downloads/hero.png"`
+
+If an absolute path is given, the plugin automatically:
+1. Copies the file into `res://assets/`
+2. Triggers an editor filesystem scan (it shows up in FileSystem dock)
+3. Loads and assigns the `Texture2D`
+
+**Example prompts:**
+- *"Use res://icon.svg as the texture for the player_head node"*
+- *"There's an image at /home/mellow/Downloads/player.png — add it to the Sprite2D on Player"*
+
+> **Note:** The node must be a `Sprite2D` or subclass. If you want to set a texture on a different node type (e.g. `TextureRect`), use `set_node_property` with property `"texture"` and a `res://` path string.
+
+---
+
+### File Operations
+
+| Tool | Description |
+|---|---|
+| `list_project_files` | List files in the project (filters out `addons`, `docs`, `PlaywrightProfile`) |
+| `run_shell_command` | Run any bash command on the host machine |
+
+`run_shell_command` returns `exit_code`, `stdout`, and `stderr`.
+
+**Example prompts:**
+- *"List all files in the project"*
+- *"Move /tmp/art.png into the project assets folder"*
+- *"Delete res://old_scene.tscn from disk"*
+- *"Copy all .png files from ~/Downloads/sprites into the project"*
+
+**⚠️ Caution:** `run_shell_command` can run any bash command. The AI is instructed not to run destructive commands unless you explicitly ask, but be clear in your prompts.
+
+---
+
+## Editing the Tool Schema
+
+All tool definitions (what tools exist, their parameters, descriptions) live in [`GodotTools.cs`](addons/godot_mcp/GodotTools.cs) in `GetToolDefinitions()`.
+
+All tool implementations (the actual Godot API calls) live in [`McpHttpServer.cs`](addons/godot_mcp/McpHttpServer.cs) in `Dispatch()` and the methods below it.
+
+**To add a new tool:**
+1. Add a `Tool(name, description, parameters)` entry in `GetToolDefinitions()` in `GodotTools.cs`
+2. Add routing in `ExecuteAsync()` in `GodotTools.cs` (either call `Call(action, params)` to forward to McpHttpServer, or handle it directly)
+3. If forwarding: add the action to `Dispatch()` in `McpHttpServer.cs` and implement the method
+4. Rebuild
+
+---
+
+## Editing the System Prompt
+
+The system prompt (the AI's instructions and personality) is built in `GetSystemPrompt()` in [`ChatDock.cs`](addons/godot_mcp/ChatDock.cs). It includes:
+- Mode instructions (Conversational vs Action)
+- The `[CALL]` / `[RESULT]` tag format
+- The full tool schema (injected automatically from `GodotTools.GetToolDefinitions()`)
+
+Edit `GetSystemPrompt()` to change how the AI behaves. After editing, rebuild and click **clear** in the chat dock so the new prompt is sent on the next message.
+
+---
+
+## Tag Format
+
+The AI communicates tool calls using bracket tags (not HTML angle brackets, which get eaten by the browser DOM):
+
+```
+[CALL]
+{"tool": "create_node", "node_type": "Sprite2D", "node_name": "Background"}
+[/CALL]
+```
+
+The plugin responds with:
+```
+[RESULT]
+{"created": "Background", "type": "Sprite2D", "path": "Background"}
+[/RESULT]
+```
+
+The AI can chain multiple tool calls — it outputs one `[CALL]`, gets a `[RESULT]`, then outputs the next `[CALL]`, up to 10 turns per user message.
+
+---
+
+## Architecture
+
+| File | Responsibility |
+|---|---|
+| [`ChatDock.cs`](addons/godot_mcp/ChatDock.cs) | UI panel, input handling, slash commands, session management, tool call loop |
+| [`AgentWrapper.cs`](addons/godot_mcp/AgentWrapper.cs) | Playwright browser controller — sends messages and reads responses from the AI web UI |
+| [`GodotTools.cs`](addons/godot_mcp/GodotTools.cs) | Tool schema definitions + HTTP routing to McpHttpServer |
+| [`McpHttpServer.cs`](addons/godot_mcp/McpHttpServer.cs) | Main-thread Godot API server — receives HTTP, executes tool commands, returns JSON |
+| [`ChatService.cs`](addons/godot_mcp/ChatService.cs) | Thin wrapper around AgentWrapper |
+
+---
+
+## Known Limitations
+
+- One tool call per AI turn (sequential, not parallel)
+- Gemini's web UI is the target — selector changes in the Gemini frontend may break `AgentWrapper.cs`
+- `set_sprite_texture` only works on `Sprite2D` nodes (use `set_node_property` + `"texture"` for others)
+- The AI sometimes gets node paths wrong on the first try — if it does, it will call `get_scene_tree` to correct itself
+
+---
+
+## License
+
+MIT

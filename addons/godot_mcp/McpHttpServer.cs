@@ -309,37 +309,29 @@ public partial class McpHttpServer : Node
     {
         Node root = EditorInterface.Singleton.GetEditedSceneRoot();
         if (root == null)
-        {
             return Serialize(new { error = "No scene open" });
-        }
 
-        // Convert the node tree into a nested dictionary structure
-        Dictionary tree = NodeToDict(root);
-        return Serialize(new { root = tree });
+        return Serialize(new { root = NodeToMap(root) });
     }
 
-    // Recursively converts a Node and its children into a dictionary:
-    // { "name": "Player", "type": "CharacterBody2D", "path": "/root/Player", "children": [...] }
-    private Dictionary NodeToDict(Node node)
+    // Recursively converts a Node tree to plain C# objects so System.Text.Json
+    // can serialize them without hitting Godot.Variant key issues.
+    private System.Collections.Generic.Dictionary<string, object> NodeToMap(Node node)
     {
-        Godot.Collections.Array<Dictionary> children = new Godot.Collections.Array<Dictionary>();
+        Node sceneRoot = EditorInterface.Singleton.GetEditedSceneRoot();
+        var children = new List<System.Collections.Generic.Dictionary<string, object>>();
 
         int childCount = node.GetChildCount();
         for (int i = 0; i < childCount; i++)
-        {
-            Node child = node.GetChild(i);
-            Dictionary childDict = NodeToDict(child);
-            children.Add(childDict);
-        }
+            children.Add(NodeToMap(node.GetChild(i)));
 
-        Dictionary result = new Dictionary
+        return new System.Collections.Generic.Dictionary<string, object>
         {
-            ["name"] = node.Name.ToString(),
-            ["type"] = node.GetClass(),
-            ["path"] = node.GetPath().ToString(),
+            ["name"]     = node.Name.ToString(),
+            ["type"]     = node.GetClass(),
+            ["path"]     = sceneRoot != null ? SceneRelativePath(sceneRoot, node) : node.Name.ToString(),
             ["children"] = children
         };
-        return result;
     }
 
     // -- Get the nodes currently selected in the editor --------------------
@@ -381,7 +373,7 @@ public partial class McpHttpServer : Node
         Node parent = root;
         if (parentPath != "")
         {
-            Node found = root.GetNodeOrNull(parentPath);
+            Node found = FindNode(root, parentPath);
             if (found == null)
             {
                 return Serialize(new { error = "Parent not found: " + parentPath });
@@ -431,7 +423,7 @@ public partial class McpHttpServer : Node
         Node parent = root;
         if (parentPath != "")
         {
-            Node found = root.GetNodeOrNull(parentPath);
+            Node found = FindNode(root, parentPath);
             if (found == null)
             {
                 return Serialize(new { error = "Parent not found: " + parentPath });
@@ -517,7 +509,7 @@ public partial class McpHttpServer : Node
         }
 
         string path = GetStr(p, "path", "");
-        Node node = root.GetNodeOrNull(path);
+        Node node = FindNode(root, path);
         if (node == null)
         {
             return Serialize(new { error = "Node not found: " + path });
@@ -546,7 +538,7 @@ public partial class McpHttpServer : Node
         string path = GetStr(p, "path", "");
         string property = GetStr(p, "property", "");
 
-        Node node = root.GetNodeOrNull(path);
+        Node node = FindNode(root, path);
         if (node == null)
             return Serialize(new { error = "Node not found: " + path });
 
@@ -713,7 +705,7 @@ public partial class McpHttpServer : Node
             return Serialize(new { error = "No scene open" });
 
         string path = GetStr(p, "path", "");
-        Node node = root.GetNodeOrNull(path);
+        Node node = FindNode(root, path);
         if (node == null)
             return Serialize(new { error = "Node not found: " + path });
 
@@ -926,6 +918,18 @@ public partial class McpHttpServer : Node
     // Helper methods
     // =======================================================================
 
+    // FindNode — resolves a path string to a Node.
+    // Handles three special cases the AI commonly uses:
+    //   ""  or "."           → the scene root itself
+    //   root.Name (e.g. "Character") → the scene root itself
+    //   anything else       → root.GetNodeOrNull(path)
+    private static Node? FindNode(Node root, string path)
+    {
+        if (string.IsNullOrEmpty(path) || path == "." || path == root.Name.ToString())
+            return root;
+        return root.GetNodeOrNull(path);
+    }
+
     // Returns the path of a node relative to the scene root.
     // Godot's GetPath() on nodes inside the editor viewport returns the full
     // internal editor path like /root/@EditorNode@.../Character/player_head.
@@ -965,7 +969,7 @@ public partial class McpHttpServer : Node
         if (string.IsNullOrEmpty(imagePath))
             return Serialize(new { error = "image_path is required" });
 
-        Node node = root.GetNodeOrNull(nodePath);
+        Node node = FindNode(root, nodePath);
         if (node == null)
             return Serialize(new { error = "Node not found: " + nodePath });
 
