@@ -277,6 +277,14 @@ public partial class McpHttpServer : Node
         {
             return ListProjectFiles(parameters);
         }
+        else if (action == "create_new_scene")
+        {
+            return CreateNewScene(parameters);
+        }
+        else if (action == "open_scene")
+        {
+            return OpenScene(parameters);
+        }
         else
         {
             return Serialize(new { error = "Unknown action: " + action });
@@ -687,6 +695,60 @@ public partial class McpHttpServer : Node
         });
     }
 
+    // -- Create a brand-new Godot scene file -------------------------------
+    private string CreateNewScene(JsonElement p)
+    {
+        string scenePath = GetStr(p, "scene_path", "");
+        string rootType = GetStr(p, "root_type", "Node2D");
+        string rootName = GetStr(p, "root_name", rootType);
+
+        if (string.IsNullOrEmpty(scenePath) || !scenePath.EndsWith(".tscn"))
+        {
+            return Serialize(new { error = "Invalid scene_path. Must be a res:// path ending in .tscn" });
+        }
+
+        if (!ClassDB.ClassExists(rootType))
+        {
+            return Serialize(new { error = "Unknown node type: " + rootType });
+        }
+
+        Node root = ClassDB.Instantiate(rootType).As<Node>();
+        if (root == null)
+        {
+            return Serialize(new { error = "Failed to instantiate: " + rootType });
+        }
+        root.Name = rootName;
+
+        PackedScene packedScene = new PackedScene();
+        Error err = packedScene.Pack(root);
+        if (err != Error.Ok)
+        {
+            return Serialize(new { error = "Failed to pack scene: " + err });
+        }
+
+        err = ResourceSaver.Save(packedScene, scenePath);
+        if (err != Error.Ok)
+        {
+            return Serialize(new { error = "Failed to save scene: " + err });
+        }
+
+        EditorInterface.Singleton.OpenSceneFromPath(scenePath);
+        return Serialize(new { created = scenePath, root_type = rootType, root_name = rootName });
+    }
+
+    // -- Open an existing scene file ---------------------------------------
+    private string OpenScene(JsonElement p)
+    {
+        string scenePath = GetStr(p, "scene_path", "");
+        if (string.IsNullOrEmpty(scenePath) || !scenePath.EndsWith(".tscn"))
+        {
+            return Serialize(new { error = "Invalid scene_path. Must be a res:// path ending in .tscn" });
+        }
+
+        EditorInterface.Singleton.OpenSceneFromPath(scenePath);
+        return Serialize(new { opened = scenePath });
+    }
+
     // -- List all files in a project directory -----------------------------
     private string ListProjectFiles(JsonElement p)
     {
@@ -713,8 +775,8 @@ public partial class McpHttpServer : Node
         // dir.GetNext() returns "" when there are no more entries
         while (item != "")
         {
-            // Skip hidden files and directories (starting with ".")
-            if (!item.StartsWith("."))
+            // Skip hidden files/directories (starting with ".") and noisy folders
+            if (!item.StartsWith(".") && item != "PlaywrightProfile" && item != "addons" && item != "docs")
             {
                 string fullPath = path.PathJoin(item);
 
