@@ -63,18 +63,27 @@ public class ChatService
         {
             _playwright = await Playwright.CreateAsync();
 
+            var chromeArgs = new System.Collections.Generic.List<string>
+            {
+                "--disable-blink-features=AutomationControlled",
+                "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            };
+
+            if (requestHeadless)
+            {
+                chromeArgs.Add("--headless=new");
+            }
+
             _context = await _playwright.Chromium.LaunchPersistentContextAsync(
                 _profilePath,
                 new BrowserTypeLaunchPersistentContextOptions
                 {
                     Headless = requestHeadless,
+                    // Set a standard viewport size to ensure layouts render correctly
+                    ViewportSize = new ViewportSize { Width = 1280, Height = 720 },
                     // Hide the automation banner so sites don't block us
                     IgnoreDefaultArgs = new[] { "--enable-automation" },
-                    Args = new[]
-                    {
-                        "--disable-blink-features=AutomationControlled",
-                        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-                    },
+                    Args = chromeArgs.ToArray()
                 }
             );
 
@@ -255,8 +264,9 @@ public class ChatService
         bool isBrandNew = Directory.GetFileSystemEntries(fullPath).Length == 0;
 
         // Determine headless mode dynamically:
-        // Temporarily forced to false (headed mode) for debugging
-        bool runHeadless = false;
+        // - If brand new profile, we MUST run headed (headless = false) so the user can sign in.
+        // - If not brand new, we run headless (headless = true) to keep the browser invisible.
+        bool runHeadless = !isBrandNew;
 
         // Launch (or reuse) the browser
         await InitializePlaywrightAsync(runHeadless);
