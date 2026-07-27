@@ -662,16 +662,24 @@ result_json
                     }
                     catch (Exception jsonEx)
                     {
-                        AppendMessage("error", $"Tool call JSON was malformed: {jsonEx.Message}\nRaw: {callJson}");
-                        keepGoing = false;
-                        break;
+                        string errorText = $"JSON parsing failed: {jsonEx.Message}. Raw block was: {callJson}. " +
+                                           "Please output the tool call again with valid JSON. Remember to escape double quotes inside content/code blocks, or use single quotes for GDScript strings.";
+                        AppendMessage("error", $"Tool call JSON was malformed. Prompting AI to self-correct...");
+
+                        currentMessage = "TOOL RESULT (do not reply to this directly — continue your task):\n" +
+                                         $"[RESULT]\n{{\"error\": {JsonSerializer.Serialize(errorText)}}}\n[/RESULT]";
+                        continue; // Keep loop active, sending the error message to the AI
                     }
 
                     if (callObj == null || !callObj.ContainsKey("tool"))
                     {
-                        AppendMessage("error", $"Tool call missing \"tool\" key. Raw: {callJson}");
-                        keepGoing = false;
-                        break;
+                        string errorText = $"Tool call missing \"tool\" key. Raw block was: {callJson}. " +
+                                           "Please output the tool call again with a valid \"tool\" key matching an available tool.";
+                        AppendMessage("error", $"Tool call missing \"tool\" key. Prompting AI to self-correct...");
+
+                        currentMessage = "TOOL RESULT (do not reply to this directly — continue your task):\n" +
+                                         $"[RESULT]\n{{\"error\": {JsonSerializer.Serialize(errorText)}}}\n[/RESULT]";
+                        continue;
                     }
 
                     string toolName = callObj["tool"].GetString() ?? "";
