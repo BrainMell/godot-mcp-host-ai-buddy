@@ -305,6 +305,66 @@ public class GodotTools
             }
         ));
 
+        // -- Script templates --
+        tools.Add(Tool(
+            name: "list_script_templates",
+            description: "List all available GDScript template files in the plugin's addons/godot_mcp/templates/ folder. " +
+                         "Each template is a ready-to-use script for common game patterns. " +
+                         "Call this first when the user asks to add movement, health, enemies, etc. " +
+                         "Then use read_file to read the template, adapt it, and write_file to save it.",
+            parameters: EmptyParams()
+        ));
+
+        tools.Add(Tool(
+            name: "read_file",
+            description: "Read the full text content of any file in the project. " +
+                         "Use to read script templates before adapting them, or inspect existing scripts.",
+            parameters: new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = Prop("string", "res:// path to the file. E.g. 'res://addons/godot_mcp/templates/character_2d_platformer.gd'")
+                },
+                required = new string[] { "path" }
+            }
+        ));
+
+        tools.Add(Tool(
+            name: "write_file",
+            description: "Write (create or overwrite) a text file in the project. " +
+                         "Use this to write adapted scripts to the project before attaching them to nodes. " +
+                         "Always write scripts to res://scripts/ or a subfolder. " +
+                         "After writing, use attach_script to attach the script to a node.",
+            parameters: new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = Prop("string", "res:// path where the file should be written. E.g. 'res://scripts/Player.gd'"),
+                    content = Prop("string", "Full text content of the file to write.")
+                },
+                required = new string[] { "path", "content" }
+            }
+        ));
+
+        tools.Add(Tool(
+            name: "attach_script",
+            description: "Attach a GDScript (.gd) file to a node in the current scene. " +
+                         "The script file must already exist (use write_file first). " +
+                         "The script's 'extends' class should match the node type.",
+            parameters: new
+            {
+                type = "object",
+                properties = new
+                {
+                    node_path = Prop("string", "Scene-relative path to the node. E.g. 'Player' or 'World/Enemy'"),
+                    script_path = Prop("string", "res:// path to the .gd script file. E.g. 'res://scripts/Player.gd'")
+                },
+                required = new string[] { "node_path", "script_path" }
+            }
+        ));
+
         return tools;
     }
 
@@ -481,6 +541,33 @@ public class GodotTools
             {
                 return JsonSerializer.Serialize(new { error = ex.Message });
             }
+        }
+        else if (toolName == "list_script_templates")
+        {
+            return await Call("list_script_templates", new { });
+        }
+        else if (toolName == "read_file")
+        {
+            return await Call("read_file", new
+            {
+                path = Str(args, "path", "")
+            });
+        }
+        else if (toolName == "write_file")
+        {
+            return await Call("write_file", new
+            {
+                path = Str(args, "path", ""),
+                content = Str(args, "content", "")
+            });
+        }
+        else if (toolName == "attach_script")
+        {
+            return await Call("attach_script", new
+            {
+                node_path = Str(args, "node_path", ""),
+                script_path = Str(args, "script_path", "")
+            });
         }
         else
         {

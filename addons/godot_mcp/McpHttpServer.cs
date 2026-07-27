@@ -3,6 +3,7 @@ using Godot;
 using Godot.Collections;
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Collections.Generic;
@@ -291,10 +292,145 @@ public partial class McpHttpServer : Node
         {
             return SetSpriteTexture(parameters);
         }
+        else if (action == "list_script_templates")
+        {
+            return ListScriptTemplates();
+        }
+        else if (action == "read_file")
+        {
+            return ReadFile(parameters);
+        }
+        else if (action == "write_file")
+        {
+            return WriteFile(parameters);
+        }
+        else if (action == "attach_script")
+        {
+            return AttachScript(parameters);
+        }
         else
         {
             return Serialize(new { error = "Unknown action: " + action });
         }
+    }
+
+    // -- List script templates ------------------------------------------------
+    private string ListScriptTemplates()
+    {
+        string templatesResPath = "res://addons/godot_mcp/templates";
+        string templatesDirOs   = ProjectSettings.GlobalizePath(templatesResPath);
+
+        if (!Directory.Exists(templatesDirOs))
+            return Serialize(new { error = "Templates directory not found: " + templatesResPath });
+
+        var templates = new List<object>();
+        foreach (string file in Directory.GetFiles(templatesDirOs, "*.gd"))
+        {
+            string fileName = Path.GetFileName(file);
+            string resPath  = templatesResPath + "/" + fileName;
+
+            // Read the first comment line as a description
+            string description = "";
+            try
+            {
+                string firstLine = File.ReadLines(file).FirstOrDefault() ?? "";
+                if (firstLine.StartsWith("# TEMPLATE:"))
+                    description = firstLine.Substring("# TEMPLATE:".Length).Trim();
+                else if (firstLine.StartsWith("#"))
+                    description = firstLine.Substring(1).Trim();
+            }
+            catch { /* ignore */ }
+
+            templates.Add(new { file = resPath, description });
+        }
+
+        return Serialize(new { templates, count = templates.Count });
+    }
+
+    // -- Read any project file -----------------------------------------------
+    private string ReadFile(JsonElement p)
+    {
+        string resPath = GetStr(p, "path", "");
+        if (string.IsNullOrEmpty(resPath))
+            return Serialize(new { error = "path is required" });
+
+        string osPath = ProjectSettings.GlobalizePath(resPath);
+        if (!File.Exists(osPath))
+            return Serialize(new { error = "File not found: " + resPath });
+
+        try
+        {
+            string content = File.ReadAllText(osPath);
+            return Serialize(new { path = resPath, content, lines = content.Split('\n').Length });
+        }
+        catch (Exception ex)
+        {
+            return Serialize(new { error = "Failed to read file: " + ex.Message });
+        }
+    }
+
+    // -- Write any project file ----------------------------------------------
+    private string WriteFile(JsonElement p)
+    {
+        string resPath = GetStr(p, "path", "");
+        string content = GetStr(p, "content", "");
+
+        if (string.IsNullOrEmpty(resPath))
+            return Serialize(new { error = "path is required" });
+
+        string osPath = ProjectSettings.GlobalizePath(resPath);
+
+        try
+        {
+            // Ensure the directory exists
+            string? dir = Path.GetDirectoryName(osPath);
+            if (dir != null && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            File.WriteAllText(osPath, content);
+
+            // Notify the editor filesystem so the file appears immediately
+            EditorInterface.Singleton.GetResourceFilesystem().Scan();
+
+            return Serialize(new
+            {
+                written = resPath,
+                bytes   = System.Text.Encoding.UTF8.GetByteCount(content),
+                lines   = content.Split('\n').Length
+            });
+        }
+        catch (Exception ex)
+        {
+            return Serialize(new { error = "Failed to write file: " + ex.Message });
+        }
+    }
+
+    // -- Attach a GDScript to a node -----------------------------------------
+    private string AttachScript(JsonElement p)
+    {
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null)
+            return Serialize(new { error = "No scene open" });
+
+        string nodePath   = GetStr(p, "node_path", "");
+        string scriptPath = GetStr(p, "script_path", "");
+
+        if (string.IsNullOrEmpty(scriptPath))
+            return Serialize(new { error = "script_path is required" });
+
+        Node node = FindNode(root, nodePath);
+        if (node == null)
+            return Serialize(new { error = "Node not found: " + nodePath });
+
+        if (!ResourceLoader.Exists(scriptPath))
+            return Serialize(new { error = "Script file not found: " + scriptPath + ". Use write_file first." });
+
+        Script? script = ResourceLoader.Load<Script>(scriptPath);
+        if (script == null)
+            return Serialize(new { error = "Failed to load script: " + scriptPath });
+
+        node.SetScript(script);
+        return Serialize(new { attached = scriptPath, node = nodePath });
     }
 
     // =======================================================================
