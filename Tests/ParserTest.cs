@@ -10,7 +10,7 @@ using System.Text.RegularExpressions;
 class ParserTest
 {
     // ---- same regex as ChatDock.cs ----
-    static readonly Regex ToolCallRegex = new Regex(@"<CALL>([ \s\S]*?)</CALL>", RegexOptions.Compiled);
+    static readonly Regex ToolCallRegex = new Regex(@"\[CALL\]([ \s\S]*?)\[/CALL\]", RegexOptions.Compiled);
 
     // ---- result format ----
     record TestResult(string Name, bool Passed, string Detail);
@@ -23,13 +23,13 @@ class ParserTest
 
         // Happy path — perfect single-line JSON
         Test("SingleLine_CreateNode",
-            input: "<CALL>\n{\"tool\": \"create_2d_node\", \"node_type\": \"Sprite2D\", \"node_name\": \"Background\"}\n</CALL>",
+            input: "[CALL]\n{\"tool\": \"create_2d_node\", \"node_type\": \"Sprite2D\", \"node_name\": \"Background\"}\n[/CALL]",
             expectedTool: "create_2d_node",
             expectedArgs: new Dictionary<string, string> { ["node_type"] = "Sprite2D", ["node_name"] = "Background" });
 
         // Multi-line pretty-printed JSON (Gemini likes to do this)
         Test("MultiLine_CreateScene",
-            input: "<CALL>\n{\n  \"tool\": \"create_new_scene\",\n  \"scene_path\": \"res://Character.tscn\",\n  \"root_type\": \"Node2D\",\n  \"root_name\": \"Character\"\n}\n</CALL>",
+            input: "[CALL]\n{\n  \"tool\": \"create_new_scene\",\n  \"scene_path\": \"res://Character.tscn\",\n  \"root_type\": \"Node2D\",\n  \"root_name\": \"Character\"\n}\n[/CALL]",
             expectedTool: "create_new_scene",
             expectedArgs: new Dictionary<string, string> {
                 ["scene_path"] = "res://Character.tscn",
@@ -39,13 +39,13 @@ class ParserTest
 
         // Tool only (no args)
         Test("NoArgs_SaveScene",
-            input: "<CALL>\n{\"tool\": \"save_scene\"}\n</CALL>",
+            input: "[CALL]\n{\"tool\": \"save_scene\"}\n[/CALL]",
             expectedTool: "save_scene",
             expectedArgs: new Dictionary<string, string>());
 
         // AI wrapped in prose — prose should be stripped, call should still parse
         Test("WrappedInProse_StillParses",
-            input: "Sure, I'll create that scene for you!\n<CALL>\n{\"tool\": \"create_new_scene\", \"scene_path\": \"res://Player.tscn\", \"root_type\": \"CharacterBody2D\", \"root_name\": \"Player\"}\n</CALL>\nLet me know if you need anything else.",
+            input: "Sure, I'll create that scene for you!\n[CALL]\n{\"tool\": \"create_new_scene\", \"scene_path\": \"res://Player.tscn\", \"root_type\": \"CharacterBody2D\", \"root_name\": \"Player\"}\n[/CALL]\nLet me know if you need anything else.",
             expectedTool: "create_new_scene",
             expectedArgs: new Dictionary<string, string> {
                 ["scene_path"] = "res://Player.tscn",
@@ -55,7 +55,7 @@ class ParserTest
 
         // Numeric args
         Test("NumericArgs_Position",
-            input: "<CALL>\n{\"tool\": \"set_node_position\", \"node_path\": \"Player\", \"x\": 300, \"y\": 150}\n</CALL>",
+            input: "[CALL]\n{\"tool\": \"set_node_position\", \"node_path\": \"Player\", \"x\": 300, \"y\": 150}\n[/CALL]",
             expectedTool: "set_node_position",
             expectedArgs: null); // just check it doesn't crash
 
@@ -65,11 +65,11 @@ class ParserTest
 
         // Missing tool key — should flag error gracefully
         TestMissingToolKey("MissingToolKey",
-            input: "<CALL>\n{\"node_type\": \"Sprite2D\", \"node_name\": \"Player\"}\n</CALL>");
+            input: "[CALL]\n{\"node_type\": \"Sprite2D\", \"node_name\": \"Player\"}\n[/CALL]");
 
         // Malformed JSON — should flag error gracefully
         TestMalformedJson("MalformedJson",
-            input: "<CALL>\n{\"tool\": \"create_2d_node\", \"node_type\": 'Sprite2D'}\n</CALL>");
+            input: "[CALL]\n{\"tool\": \"create_2d_node\", \"node_type\": 'Sprite2D'}\n[/CALL]");
 
         // --- summary ---
         Console.WriteLine("\n=== Results ===");
