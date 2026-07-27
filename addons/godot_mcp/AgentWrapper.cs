@@ -140,12 +140,14 @@ public class ChatService
         return "Success: Transmitted to ChatGPT.";
     }
 
-    private async Task<string> SendMessageToGeminiAsync(string message)
+    private async Task<string> SendMessageToGeminiAsync(string message, bool keepSession = false)
     {
-        await _page.GotoAsync(_Gemini);
-
-        // Wait for page elements to load
-        await _page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+        if (!keepSession || !_page.Url.StartsWith("https://gemini.google.com/app"))
+        {
+            await _page.GotoAsync(_Gemini);
+            // Wait for page elements to load
+            await _page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+        }
 
         // Check if we are signed out (if either of the Sign In buttons are present)
         bool isSignedOut = await _page.Locator("[data-test-id=\"sign-in-button\"]").CountAsync() > 0
@@ -250,8 +252,9 @@ public class ChatService
     // message:      the text to send to the AI
     // needsBrowser: false = reuse existing browser | true = headless mode
     // model:        which AI to use — "gemini", "chatgpt", or "zai"
+    // keepSession:  if true, tries to keep the existing session/url for Gemini
     // -----------------------------------------------------------------------
-    public async Task<string> SendMessageAsync(string message, bool needsBrowser, string model)
+    public async Task<string> SendMessageAsync(string message, bool needsBrowser, string model, bool keepSession = false)
     {
         // Make sure the profile folder exists on disk
         string fullPath = Path.GetFullPath(_profilePath);
@@ -282,7 +285,7 @@ public class ChatService
         switch (model.ToLower())
         {
             case "chatgpt": return await SendMessageToChatGPTAsync(message);
-            case "gemini":  return await SendMessageToGeminiAsync(message);
+            case "gemini":  return await SendMessageToGeminiAsync(message, keepSession);
             case "zai":     return await SendMessageToZaiAsync(message);
             default:
                 throw new ArgumentException($"Unknown model: '{model}'. Use \"gemini\", \"chatgpt\", or \"zai\".");

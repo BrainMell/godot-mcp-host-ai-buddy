@@ -3,6 +3,8 @@ using Godot;
 using System.Threading.Tasks;
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
+using System.Text.Json;
 
 namespace GodotMCP;
 
@@ -40,7 +42,11 @@ public partial class ChatDock : Control
     // -- State -------------------------------------------------------------
     // ? means this can be null (it's null if the API key wasn't found)
     private ChatService? _agent;
+    private GodotTools _tools = null!;
     private bool _waiting;             // True while we're waiting for a response
+
+    // Tool call parser: matches <<CALL: tool_name(arguments_json)>>
+    private static readonly Regex ToolCallRegex = new Regex(@"<<CALL:\s*([a-zA-Z0-9_-]+)\(([\s\S]*?)\)\s*>>", RegexOptions.Compiled);
 
     // -- Color palette (muted, terminal-flavored) --------------------------
     // These are RGB values in the 0.0 to 1.0 range
@@ -77,7 +83,7 @@ public partial class ChatDock : Control
     }
 
     // -----------------------------------------------------------------------
-    // TryInitAgent — create the ChatService
+    // TryInitAgent — create the ChatService and GodotTools
     // -----------------------------------------------------------------------
 
     private void TryInitAgent()
@@ -86,6 +92,7 @@ public partial class ChatDock : Control
         {
             // ChatService doesn't need an API key or tools — the browser does the work
             _agent = new ChatService();
+            _tools = new GodotTools();
             SetStatus("ready", StatusOkColor);
         }
         catch (Exception ex)
@@ -93,6 +100,32 @@ public partial class ChatDock : Control
             AppendMessage("error", ex.Message);
             SetStatus("error", StatusErrColor);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // GetSystemPrompt — builds the system instructions including tool schemas
+    // -----------------------------------------------------------------------
+    private string GetSystemPrompt()
+    {
+        var definitions = _tools.GetToolDefinitions();
+        string toolsJson = JsonSerializer.Serialize(definitions, new JsonSerializerOptions { WriteIndented = true });
+
+        return $@"You are an AI assistant designed to control the Godot editor to help the user.
+You can execute Godot editor tools by outputting a tool call block.
+When you need to call a tool, you MUST use the following exact format:
+<<CALL: tool_name(arguments_json)>>
+
+Here are the tools available to you:
+{toolsJson}
+
+Example of creating a 2D node:
+<<CALL: create_2d_node({{""node_type"": ""Sprite2D"", ""node_name"": ""Player"", ""position"": [100, 200]}})>>
+
+Rules:
+1. Always output exactly one <<CALL: ...>> block when you need to run a tool, then stop writing.
+2. The system will execute the tool and provide you the result in the next turn as: <<RESULT: result_json>>
+3. If you need to make multiple tool calls, do them one by one, waiting for the result of the previous call.
+4. Once you have all the information/results needed and the user's request is complete, output your final reply to the user without any <<CALL: ...>> blocks.";
     }
 
     // =======================================================================
@@ -385,13 +418,50 @@ public partial class ChatDock : Control
 
         try
         {
-            // Send the message to ChatService and wait for a response
-            // needsBrowser: false = reuse existing browser, true = headless
-            // model: which AI to route to — "gemini", "chatgpt", or "zai"
-            string reply = await _agent.SendMessageAsync(text, false, "gemini");
+            // Prepend system prompt to the user's request for the first turn
+            string currentMessage = GetSystemPrompt() + "\n\nUser Request: " + text;
+            bool keepGoing = true;
+            bool keepSession = false; // first message starts a new conversation
+            int turnCount = 0;
 
-            // Show the AI's reply
-            AppendMessage("ai", reply);
+            while (keepGoing && turnCount < 10)
+            {
+                turnCount++;
+                
+                // Send the message to ChatService and wait for a response
+                // We pass keepSession = true for subsequent tool result updates
+                string reply = await _agent.SendMessageAsync(currentMessage, false, "gemini", keepSession);
+                keepSession = true; // subsequent loops run in the same session
+
+                Match match = ToolCallRegex.Match(reply);
+                if (match.Success)
+                {
+                    string toolName = match.Groups[1].Value;
+                    string argsJson = match.Groups[2].Value.Trim();
+
+                    // Display any text the AI wrote before the tool call
+                    string cleanReply = ToolCallRegex.Replace(reply, "").Trim();
+                    if (!string.IsNullOrEmpty(cleanReply))
+                    {
+                        AppendMessage("ai", cleanReply);
+                    }
+
+                    AppendMessage("tool", $"Calling {toolName} with: {argsJson}");
+
+                    // Execute the tool
+                    string toolResult = await _tools.ExecuteAsync(toolName, argsJson);
+                    AppendMessage("tool", $"Result: {toolResult}");
+
+                    // Feed the tool result back into the agent
+                    currentMessage = $"<<RESULT: {toolResult}>>";
+                }
+                else
+                {
+                    // AI responded with no tool calls. We are done!
+                    AppendMessage("ai", reply);
+                    keepGoing = false;
+                }
+            }
 
             SetStatus("ready", StatusOkColor);
         }
