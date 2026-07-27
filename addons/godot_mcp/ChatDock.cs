@@ -169,6 +169,7 @@ Rules for the format:
 - `tool` is REQUIRED and must be the exact tool name from the list below.
 - All other keys are the arguments for that tool, matching its parameter names exactly.
 - The JSON inside [CALL] tags must be valid. Use double quotes for all strings.
+- CRITICAL: When writing scripts/code inside the ""content"" parameter of ""write_file"", you MUST escape all double quotes as \"" or use single quotes ' in your GDScript strings (e.g. Input.is_action_just_pressed('ui_accept')). Unescaped double quotes will corrupt the JSON and cause a parsing failure.
 - Do NOT wrap it in markdown code fences (no ```). Do NOT add any text outside the tags.
 
 #### Concrete Examples:
