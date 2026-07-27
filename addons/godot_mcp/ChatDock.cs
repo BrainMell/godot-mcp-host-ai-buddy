@@ -46,6 +46,12 @@ public partial class ChatDock : Control
     private GodotTools _tools = null!;
     private bool _waiting;             // True while we're waiting for a response
 
+    // Session state — tracks whether Gemini has been primed with the system prompt.
+    // _sessionActive : true = browser is on an active Gemini chat URL (keepSession can be true)
+    // _sessionPrimed : true = system prompt has already been sent, AI knows its role
+    private bool _sessionActive = false;
+    private bool _sessionPrimed = false;
+
     // Tool call parser: matches <CALL>{...json...}</CALL>
     // The JSON object must have a "tool" key (tool name) and optionally other keys as args.
     private static readonly Regex ToolCallRegex = new Regex(@"<CALL>([\ \s\S]*?)</CALL>", RegexOptions.Compiled);
@@ -181,6 +187,20 @@ result_json
 {toolsJson}";
     }
 
+    // -----------------------------------------------------------------------
+    // PrimeSessionAsync — sends the system prompt to a brand new Gemini chat
+    // and waits for a short acknowledgment. After this, all user messages are
+    // sent as plain short text inside the same session (keepSession = true).
+    // -----------------------------------------------------------------------
+    private async Task<string> PrimeSessionAsync()
+    {
+        // keepSession = false → navigate to a fresh Gemini conversation
+        string primeMessage = GetSystemPrompt()
+            + "\n\nYou are now set up. Respond only with: READY";
+
+        return await _agent!.SendMessageAsync(primeMessage, false, "gemini", keepSession: false);
+    }
+
     // =======================================================================
     // UI CONSTRUCTION
     //
@@ -188,6 +208,7 @@ result_json
     // In Godot you can either build UI in the editor or in code — this
     // plugin does it all in code so there are no extra files to manage.
     // =======================================================================
+
 
     private void BuildUi()
     {
@@ -486,10 +507,27 @@ result_json
 
         try
         {
-            // Prepend system prompt to the user's request for the first turn
-            string currentMessage = GetSystemPrompt() + "\n\nUser Request: " + text;
+            // --- Session priming --------------------------------------------
+            // If this is the very first message of this session, send the
+            // system prompt alone first so Gemini can absorb its role without
+            // the user's command being buried at the bottom of a wall of text.
+            if (!_sessionPrimed)
+            {
+                AppendMessage("system", "priming session with tool definitions...");
+                SetStatus("priming", StatusBusyColor);
+
+                string primeAck = await PrimeSessionAsync();
+                GD.Print($"[GodotMCP] Prime ack: {primeAck}");
+
+                _sessionPrimed = true;
+                _sessionActive = true;
+                AppendMessage("system", "session ready.");
+            }
+
+            // Now send the user's actual message as a clean, short turn
+            // inside the already-primed session (keepSession = true)
+            string currentMessage = text;
             bool keepGoing = true;
-            bool keepSession = false; // first message starts a new conversation
             int turnCount = 0;
 
             while (keepGoing && turnCount < 10)
@@ -497,8 +535,8 @@ result_json
                 turnCount++;
 
                 // Send the message to ChatService and wait for a response
-                string reply = await _agent.SendMessageAsync(currentMessage, false, "gemini", keepSession);
-                keepSession = true;
+                // Always keepSession = true after priming so we stay in the same conversation
+                string reply = await _agent.SendMessageAsync(currentMessage, false, "gemini", keepSession: true);
 
                 // Debug: log the raw AI response so we can see exactly what was returned
                 GD.Print($"[GodotMCP] AI raw reply (turn {turnCount}): {reply}");
@@ -704,7 +742,10 @@ result_json
     private void ClearChat()
     {
         _output.Clear();
-        AppendMessage("system", "chat cleared.");
+        // Reset session so the next message starts a fresh primed Gemini conversation
+        _sessionActive = false;
+        _sessionPrimed = false;
+        AppendMessage("system", "chat cleared. next message will start a new session.");
     }
 
     // Copy the full chat log as plain text to the clipboard
