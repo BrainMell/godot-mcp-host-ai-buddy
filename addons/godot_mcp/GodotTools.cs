@@ -181,8 +181,11 @@ public class GodotTools
         // -- Set a property on a node --
         tools.Add(Tool(
             name: "set_node_property",
-            description: "Set a property on a node. For Vector2 properties like position or scale, " +
-                         "pass value as [x, y] array. For colors pass [r, g, b, a]. For strings pass a string. " +
+            description: "Set a property on a node. IMPORTANT: if you are unsure whether a property " +
+                         "name is valid for the node type, call get_node_properties first to see the " +
+                         "full list of available properties. " +
+                         "For Vector2 properties like position or scale, pass value as [x, y] array. " +
+                         "For colors pass [r, g, b, a]. For strings pass a string. " +
                          "For booleans pass true/false.",
             parameters: new
             {
@@ -257,6 +260,48 @@ public class GodotTools
                         "Full res:// path to the scene file. E.g. 'res://scenes/Main.tscn'.")
                 },
                 required = new string[] { "scene_path" }
+            }
+        ));
+
+        // -- Set a sprite texture from a file path --
+        tools.Add(Tool(
+            name: "set_sprite_texture",
+            description: "Assign an image file as the texture of a Sprite2D node. " +
+                         "The image_path can be a res:// path (inside the project) or an " +
+                         "absolute filesystem path (e.g. /home/user/images/player.png) — " +
+                         "if an absolute path is given, the file will be copied into the project first. " +
+                         "The node at 'path' must be a Sprite2D or subclass.",
+            parameters: new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = Prop("string", "Node path in the scene. E.g. 'Player/Sprite2D'"),
+                    image_path = Prop("string",
+                        "Path to the image. Either res:// project path or absolute OS path. " +
+                        "Supported formats: png, jpg, webp, svg.")
+                },
+                required = new string[] { "path", "image_path" }
+            }
+        ));
+
+        // -- Run a shell command --
+        tools.Add(Tool(
+            name: "run_shell_command",
+            description: "Run a bash shell command on the host machine. Use for file operations: " +
+                         "moving, copying, or deleting files anywhere on the filesystem. " +
+                         "Example commands: 'mv /tmp/art.png /home/user/project/assets/art.png', " +
+                         "'rm /home/user/project/old_scene.tscn', 'cp /downloads/sprite.png res://assets/'. " +
+                         "CAUTION: do not run destructive commands unless the user explicitly asked. " +
+                         "Returns stdout, stderr, and exit code.",
+            parameters: new
+            {
+                type = "object",
+                properties = new
+                {
+                    command = Prop("string", "The full bash command to run. E.g. 'mv /tmp/hero.png /home/user/project/assets/hero.png'")
+                },
+                required = new string[] { "command" }
             }
         ));
 
@@ -394,6 +439,48 @@ public class GodotTools
             {
                 scene_path = Str(args, "scene_path", "")
             });
+        }
+        else if (toolName == "set_sprite_texture")
+        {
+            return await Call("set_sprite_texture", new
+            {
+                path = Str(args, "path", ""),
+                image_path = Str(args, "image_path", "")
+            });
+        }
+        else if (toolName == "run_shell_command")
+        {
+            string command = Str(args, "command", "");
+            if (string.IsNullOrEmpty(command))
+                return JsonSerializer.Serialize(new { error = "No command provided" });
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "/bin/bash",
+                    Arguments = "-c " + JsonSerializer.Serialize(command),
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using var proc = System.Diagnostics.Process.Start(psi);
+                if (proc == null)
+                    return JsonSerializer.Serialize(new { error = "Failed to start process" });
+                string stdout = await proc.StandardOutput.ReadToEndAsync();
+                string stderr = await proc.StandardError.ReadToEndAsync();
+                await proc.WaitForExitAsync();
+                return JsonSerializer.Serialize(new
+                {
+                    exit_code = proc.ExitCode,
+                    stdout = stdout.Trim(),
+                    stderr = stderr.Trim()
+                });
+            }
+            catch (Exception ex)
+            {
+                return JsonSerializer.Serialize(new { error = ex.Message });
+            }
         }
         else
         {

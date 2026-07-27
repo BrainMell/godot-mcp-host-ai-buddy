@@ -1,6 +1,8 @@
 #if TOOLS
 using Godot;
 using Godot.Collections;
+using System;
+using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Collections.Generic;
@@ -285,6 +287,10 @@ public partial class McpHttpServer : Node
         {
             return OpenScene(parameters);
         }
+        else if (action == "set_sprite_texture")
+        {
+            return SetSpriteTexture(parameters);
+        }
         else
         {
             return Serialize(new { error = "Unknown action: " + action });
@@ -399,7 +405,7 @@ public partial class McpHttpServer : Node
         {
             created = nodeName,
             type = nodeType,
-            path = newNode.GetPath().ToString()
+            path = SceneRelativePath(root, newNode)
         });
     }
 
@@ -470,12 +476,8 @@ public partial class McpHttpServer : Node
         {
             if (posEl.ValueKind == JsonValueKind.Array)
             {
-                // Read the [x, y] values from the array
                 List<JsonElement> items = new List<JsonElement>();
-                foreach (JsonElement item in posEl.EnumerateArray())
-                {
-                    items.Add(item);
-                }
+                foreach (JsonElement item in posEl.EnumerateArray()) items.Add(item);
 
                 if (items.Count >= 2)
                 {
@@ -484,19 +486,13 @@ public partial class McpHttpServer : Node
 
                     if (newNode is Node2D n2d)
                     {
-                        // Node2D and subclasses (Sprite2D, CharacterBody2D, etc.)
                         n2d.Position = new Vector2((float)x, (float)y);
-                        positionNote = "position=[" + x + ", " + y + "]";
+                        positionNote = "[" + x + ", " + y + "]";
                     }
                     else if (newNode is Control ctrl)
                     {
-                        // Control and subclasses (Label, Button, Panel, etc.)
                         ctrl.Position = new Vector2((float)x, (float)y);
-                        positionNote = "position=[" + x + ", " + y + "]";
-                    }
-                    else
-                    {
-                        positionNote = "position ignored (node type does not expose a 2D position)";
+                        positionNote = "[" + x + ", " + y + "]";
                     }
                 }
             }
@@ -506,8 +502,7 @@ public partial class McpHttpServer : Node
         {
             created = nodeName,
             type = nodeType,
-            path = newNode.GetPath().ToString(),
-            parent = parent.GetPath().ToString(),
+            path = SceneRelativePath(root, newNode),
             position = positionNote
         });
     }
@@ -533,88 +528,173 @@ public partial class McpHttpServer : Node
         return Serialize(new { deleted = name });
     }
 
-    // -- Set a property on a node ------------------------------------------
+    // -- Set a property on a node — type-aware --------------------------------
     //
-    // Handles multiple value types:
-    //   - string  → pass as-is
-    //   - number  → pass as double/float
-    //   - boolean → true/false
-    //   - array   → try to parse as Vector2 [x, y]
+    // Reads the node's property list to determine the ACTUAL Godot Variant.Type
+    // of the property, then casts the JSON value appropriately.
+    //
+    // Supported types:
+    //   Bool, Int, Float, String, StringName,
+    //   Vector2, Vector3, Vector4, Color, Rect2,
+    //   NodePath
     private string SetNodeProperty(JsonElement p)
     {
         Node root = EditorInterface.Singleton.GetEditedSceneRoot();
         if (root == null)
-        {
             return Serialize(new { error = "No scene open" });
-        }
 
         string path = GetStr(p, "path", "");
         string property = GetStr(p, "property", "");
 
         Node node = root.GetNodeOrNull(path);
         if (node == null)
-        {
             return Serialize(new { error = "Node not found: " + path });
-        }
 
-        // Check if a "value" was provided
-        if (p.TryGetProperty("value", out JsonElement val))
+        if (!p.TryGetProperty("value", out JsonElement val))
+            return Serialize(new { error = "No value provided" });
+
+        // Look up the declared Variant.Type for this property
+        Variant.Type propType = Variant.Type.Nil;
+        var propList = node.GetPropertyList();
+        for (int i = 0; i < propList.Count; i++)
         {
-            // Convert the JSON value to a Godot Variant based on its type
-            // In Godot C#, Variant has implicit conversion from C# types —
-            // you just assign the value directly, no "new Variant()" needed
-            Variant godotVal;
-
-            if (val.ValueKind == JsonValueKind.True)
+            var info = propList[i];
+            if (info["name"].AsString() == property)
             {
-                godotVal = true;
+                propType = (Variant.Type)info["type"].AsInt32();
+                break;
             }
-            else if (val.ValueKind == JsonValueKind.False)
-            {
-                godotVal = false;
-            }
-            else if (val.ValueKind == JsonValueKind.Number)
-            {
-                godotVal = val.GetDouble();
-            }
-            else if (val.ValueKind == JsonValueKind.String)
-            {
-                string strVal = val.GetString() ?? "";
-                godotVal = strVal;
-            }
-            else if (val.ValueKind == JsonValueKind.Array)
-            {
-                // Arrays are treated as Vector2
-                godotVal = ParseVector2(val);
-            }
-            else
-            {
-                godotVal = "";
-            }
-
-            node.Set(property, godotVal);
         }
 
-        return Serialize(new { set = property, node = path });
+        Variant godotVal;
+        try
+        {
+            godotVal = ConvertToVariant(val, propType);
+        }
+        catch (Exception ex)
+        {
+            return Serialize(new { error = "Type conversion failed: " + ex.Message });
+        }
+
+        node.Set(property, godotVal);
+        return Serialize(new { set = property, node = path, type = propType.ToString() });
     }
 
-    // Parse a JSON array [x, y] into a Godot Vector2
-    private Variant ParseVector2(JsonElement arr)
+    // Convert a JsonElement to a Godot Variant using the declared property type.
+    // Falls back to a best-effort guess when propType is Nil (unknown).
+    private Variant ConvertToVariant(JsonElement val, Variant.Type propType)
     {
-        List<JsonElement> items = new List<JsonElement>();
-        foreach (JsonElement item in arr.EnumerateArray())
+        // Helper: read a float array from the JSON element
+        List<float> Floats(JsonElement el)
         {
-            items.Add(item);
+            var list = new List<float>();
+            foreach (var item in el.EnumerateArray())
+                list.Add((float)item.GetDouble());
+            return list;
         }
 
-        if (items.Count >= 2)
+        switch (propType)
         {
-            float x = (float)items[0].GetDouble();
-            float y = (float)items[1].GetDouble();
-            return new Vector2(x, y);
-        }
+            case Variant.Type.Bool:
+                if (val.ValueKind == JsonValueKind.True)  return true;
+                if (val.ValueKind == JsonValueKind.False) return false;
+                if (val.ValueKind == JsonValueKind.Number) return val.GetDouble() != 0;
+                return val.GetString()?.ToLower() == "true";
 
-        return "";
+            case Variant.Type.Int:
+                if (val.ValueKind == JsonValueKind.Number) return (long)val.GetDouble();
+                if (long.TryParse(val.GetString(), out long lv)) return lv;
+                return (long)0;
+
+            case Variant.Type.Float:
+                if (val.ValueKind == JsonValueKind.Number) return val.GetDouble();
+                if (double.TryParse(val.GetString(), out double dv)) return dv;
+                return 0.0;
+
+            case Variant.Type.String:
+                return val.GetString() ?? "";
+
+            case Variant.Type.StringName:
+                return new StringName(val.GetString() ?? "");
+
+            case Variant.Type.NodePath:
+                return new NodePath(val.GetString() ?? "");
+
+            case Variant.Type.Vector2:
+            {
+                var f = Floats(val);
+                return f.Count >= 2 ? new Vector2(f[0], f[1]) : Vector2.Zero;
+            }
+
+            case Variant.Type.Vector2I:
+            {
+                var f = Floats(val);
+                return f.Count >= 2 ? new Vector2I((int)f[0], (int)f[1]) : Vector2I.Zero;
+            }
+
+            case Variant.Type.Vector3:
+            {
+                var f = Floats(val);
+                return f.Count >= 3 ? new Vector3(f[0], f[1], f[2]) : Vector3.Zero;
+            }
+
+            case Variant.Type.Vector3I:
+            {
+                var f = Floats(val);
+                return f.Count >= 3 ? new Vector3I((int)f[0], (int)f[1], (int)f[2]) : Vector3I.Zero;
+            }
+
+            case Variant.Type.Vector4:
+            {
+                var f = Floats(val);
+                return f.Count >= 4 ? new Vector4(f[0], f[1], f[2], f[3]) : Vector4.Zero;
+            }
+
+            case Variant.Type.Color:
+            {
+                // Accept [r, g, b] or [r, g, b, a] (0–1 range) or a "#RRGGBB" string
+                if (val.ValueKind == JsonValueKind.String)
+                    return new Color(val.GetString() ?? "#ffffff");
+                var f = Floats(val);
+                return f.Count >= 3
+                    ? new Color(f[0], f[1], f[2], f.Count >= 4 ? f[3] : 1f)
+                    : Colors.White;
+            }
+
+            case Variant.Type.Rect2:
+            {
+                // Accept [x, y, width, height]
+                var f = Floats(val);
+                return f.Count >= 4
+                    ? new Rect2(f[0], f[1], f[2], f[3])
+                    : new Rect2();
+            }
+
+            case Variant.Type.Rect2I:
+            {
+                var f = Floats(val);
+                return f.Count >= 4
+                    ? new Rect2I((int)f[0], (int)f[1], (int)f[2], (int)f[3])
+                    : new Rect2I();
+            }
+
+            default:
+                // Unknown / Nil — best-effort fallback based on JSON kind
+                if (val.ValueKind == JsonValueKind.True)  return true;
+                if (val.ValueKind == JsonValueKind.False) return false;
+                if (val.ValueKind == JsonValueKind.Number) return val.GetDouble();
+                if (val.ValueKind == JsonValueKind.String) return val.GetString() ?? "";
+                if (val.ValueKind == JsonValueKind.Array)
+                {
+                    var f = new List<float>();
+                    foreach (var item in val.EnumerateArray())
+                        f.Add((float)item.GetDouble());
+                    if (f.Count == 2) return new Vector2(f[0], f[1]);
+                    if (f.Count == 3) return new Color(f[0], f[1], f[2]);
+                    if (f.Count == 4) return new Color(f[0], f[1], f[2], f[3]);
+                }
+                return "";
+        }
     }
 
     // -- Get all properties of a node --------------------------------------
@@ -798,6 +878,100 @@ public partial class McpHttpServer : Node
     // =======================================================================
     // Helper methods
     // =======================================================================
+
+    // Returns the path of a node relative to the scene root.
+    // Godot's GetPath() on nodes inside the editor viewport returns the full
+    // internal editor path like /root/@EditorNode@.../Character/player_head.
+    // We want just "player_head" or "Character/player_head".
+    private static string SceneRelativePath(Node sceneRoot, Node node)
+    {
+        string fullPath = node.GetPath().ToString();
+        string rootPath = sceneRoot.GetPath().ToString();
+
+        // Strip the scene root prefix (including the trailing slash)
+        if (fullPath.StartsWith(rootPath))
+        {
+            string relative = fullPath.Substring(rootPath.Length);
+            if (relative.StartsWith("/"))
+                relative = relative.Substring(1);
+            return string.IsNullOrEmpty(relative) ? sceneRoot.Name.ToString() : relative;
+        }
+
+        // Fallback: return just the node name
+        return node.Name.ToString();
+    }
+
+    // -- Assign an image as the texture of a Sprite2D node -----------------
+    //
+    // image_path can be:
+    //   - res://path/to/image.png  → loaded directly via ResourceLoader
+    //   - /absolute/os/path.png   → copied into res://assets/ first, then loaded
+    private string SetSpriteTexture(JsonElement p)
+    {
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null)
+            return Serialize(new { error = "No scene open" });
+
+        string nodePath  = GetStr(p, "path", "");
+        string imagePath = GetStr(p, "image_path", "");
+
+        if (string.IsNullOrEmpty(imagePath))
+            return Serialize(new { error = "image_path is required" });
+
+        Node node = root.GetNodeOrNull(nodePath);
+        if (node == null)
+            return Serialize(new { error = "Node not found: " + nodePath });
+
+        if (node is not Sprite2D sprite)
+            return Serialize(new { error = "Node is not a Sprite2D: " + nodePath });
+
+        // --- Resolve the resource path ---
+        string resPath = imagePath;
+
+        if (!imagePath.StartsWith("res://"))
+        {
+            // Absolute OS path — copy the file into res://assets/
+            string fileName  = System.IO.Path.GetFileName(imagePath);
+            string assetsDir = ProjectSettings.GlobalizePath("res://assets");
+
+            if (!System.IO.Directory.Exists(assetsDir))
+                System.IO.Directory.CreateDirectory(assetsDir);
+
+            string destOsPath = System.IO.Path.Combine(assetsDir, fileName);
+
+            try
+            {
+                System.IO.File.Copy(imagePath, destOsPath, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                return Serialize(new { error = "Failed to copy image: " + ex.Message });
+            }
+
+            resPath = "res://assets/" + fileName;
+
+            // Tell the editor about the new file so it shows up in FileSystem dock
+            EditorInterface.Singleton.GetResourceFilesystem().Scan();
+        }
+
+        // --- Load and assign the texture ---
+        if (!ResourceLoader.Exists(resPath))
+            return Serialize(new { error = "Resource not found after copy: " + resPath });
+
+        Texture2D? texture = ResourceLoader.Load<Texture2D>(resPath);
+        if (texture == null)
+            return Serialize(new { error = "Failed to load texture from: " + resPath });
+
+        sprite.Texture = texture;
+
+        return Serialize(new
+        {
+            assigned = resPath,
+            node = nodePath,
+            width  = texture.GetWidth(),
+            height = texture.GetHeight()
+        });
+    }
 
     // Safely read a string from a JsonElement.
     // Returns the fallback if the key doesn't exist or isn't a string.
