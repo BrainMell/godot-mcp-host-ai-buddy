@@ -99,6 +99,14 @@ public partial class ChatDock : Control
         }
     }
 
+    public override void _ExitTree()
+    {
+        if (_clearBtn != null) _clearBtn.Pressed -= ClearChat;
+        if (_copyBtn != null) _copyBtn.Pressed -= CopyChat;
+        if (_input != null) _input.TextSubmitted -= OnSend;
+        if (_sendBtn != null) _sendBtn.Pressed -= OnSendButtonPressed;
+    }
+
     // -----------------------------------------------------------------------
     // TryInitAgent — create the ChatService and GodotTools
     // -----------------------------------------------------------------------
@@ -483,8 +491,13 @@ result_json
         _sendBtn.AddThemeStyleboxOverride("pressed", MakeStyle(PanelBgColor, 0, AccentColor));
 
         // When the send button is clicked, send the current input text
-        _sendBtn.Pressed += () => OnSend(_input.Text);
+        _sendBtn.Pressed += OnSendButtonPressed;
         inputRow.AddChild(_sendBtn);
+    }
+
+    private void OnSendButtonPressed()
+    {
+        OnSend(_input.Text);
     }
 
     private async void SetModel()
