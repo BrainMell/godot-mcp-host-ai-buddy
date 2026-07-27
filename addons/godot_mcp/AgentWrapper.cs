@@ -135,6 +135,31 @@ public class ChatService
     {
         await _page.GotoAsync(_Gemini);
 
+        // Check if we were redirected away from the app (not logged in or session expired)
+        if (!_page.Url.StartsWith("https://gemini.google.com/app"))
+        {
+            await _context.CloseAsync();
+            _playwright.Dispose();
+
+            _playwright = null!;
+            _context    = null!;
+            _page       = null!;
+            _stateOfBrowser = null;
+
+            string fullPath = Path.GetFullPath(_profilePath);
+            if (Directory.Exists(fullPath))
+            {
+                try
+                {
+                    foreach (string file in Directory.GetFiles(fullPath)) File.Delete(file);
+                    foreach (string subDir in Directory.GetDirectories(fullPath)) Directory.Delete(subDir, true);
+                }
+                catch { /* ignore lock errors */ }
+            }
+
+            return "LoginRequired: Session expired or not signed in. Please log in again in the opened browser window and restart.";
+        }
+
         if (string.IsNullOrEmpty(message))
         {
             return "Error: Message cannot be empty for Gemini.";
@@ -223,8 +248,13 @@ public class ChatService
         // A brand-new empty folder means there's no saved session yet
         bool isBrandNew = Directory.GetFileSystemEntries(fullPath).Length == 0;
 
+        // Determine headless mode dynamically:
+        // - If brand new profile, we MUST run headed (headless = false) so the user can sign in.
+        // - If not brand new, we run headless (headless = true) to keep the browser invisible.
+        bool runHeadless = !isBrandNew;
+
         // Launch (or reuse) the browser
-        await InitializePlaywrightAsync(needsBrowser);
+        await InitializePlaywrightAsync(runHeadless);
 
         // Check if the user is logged in — bail early if not
         string loginStatus = await CheckIfLoggedInAsync(isBrandNew);
