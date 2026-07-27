@@ -45,8 +45,9 @@ public partial class ChatDock : Control
     private GodotTools _tools = null!;
     private bool _waiting;             // True while we're waiting for a response
 
-    // Tool call parser: matches <<CALL: tool_name(arguments_json)>>
-    private static readonly Regex ToolCallRegex = new Regex(@"<<CALL:\s*([a-zA-Z0-9_-]+)\(([\s\S]*?)\)\s*>>", RegexOptions.Compiled);
+    // Tool call parser: matches <CALL>{...json...}</CALL>
+    // The JSON object must have a "tool" key (tool name) and optionally other keys as args.
+    private static readonly Regex ToolCallRegex = new Regex(@"<CALL>([\ \s\S]*?)</CALL>", RegexOptions.Compiled);
 
     // -- Color palette (muted, terminal-flavored) --------------------------
     // These are RGB values in the 0.0 to 1.0 range
@@ -126,38 +127,56 @@ You must dynamically choose between two distinct modes of operation depending on
 
 1. **CONVERSATIONAL MODE**:
    - **Trigger**: The user is asking questions, seeking advice, asking about your capabilities, requesting a listing of tools, or discussing game logic.
-   - **Behavior**: Respond in normal, helpful, conversational markdown text. Explain your answers clearly. Do NOT output any tool call blocks (`<<CALL: ...>>`).
+   - **Behavior**: Respond in normal, helpful, conversational text. Explain your answers clearly. Do NOT output any <CALL> blocks.
 
 2. **ACTION MODE**:
-   - **Trigger**: The user requests an action inside the editor (e.g., ""create a sprite"", ""delete the Player"", ""move the camera"", ""save the scene"", ""list the project files"").
-   - **Behavior**: Your response **MUST contain ONLY the tool call block and absolutely nothing else**.
-   - **CRITICAL RULE**: Do not output introductory text (like ""Sure, let me do that""), explaining text, or any conversational filler. Your entire response must be just the tool call.
+   - **Trigger**: The user requests an action inside the editor (e.g., ""create a node"", ""delete the Player"", ""save the scene"", ""list files"").
+   - **Behavior**: Your response **MUST contain ONLY the <CALL> block and absolutely nothing else**. No introduction, no explanation, no filler text before or after it.
 
-### Tool Call Syntax
-In **Action Mode**, write your tool call exactly like this:
-<<CALL: tool_name(arguments_json)>>
+### Tool Call Format
+In **Action Mode**, your ENTIRE response must be exactly this — nothing more:
 
-- The arguments inside the parentheses must be a valid, single-line JSON object matching the tool's schema.
-- Do not add backticks, code blocks, or extra text around the `<<CALL:...>>` block.
+<CALL>
+{{""tool"": ""tool_name_here"", ""param1"": ""value1"", ""param2"": ""value2""}}
+</CALL>
 
-#### Examples of Action Mode Responses:
-- User: ""Create a Sprite2D node named Background""
-  Correct Response:
-  <<CALL: create_2d_node({{""node_type"": ""Sprite2D"", ""node_name"": ""Background""}})>>
+Rules for the format:
+- `tool` is REQUIRED and must be the exact tool name from the list below.
+- All other keys are the arguments for that tool, matching its parameter names exactly.
+- The JSON inside <CALL> tags must be valid. Use double quotes for all strings.
+- Do NOT wrap it in markdown code fences (no ```). Do NOT add any text outside the tags.
 
-- User: ""Save the current open scene""
-  Correct Response:
-  <<CALL: save_scene({{}})>>
+#### Concrete Examples:
 
-### Handling Tool Results (The Loop)
-When you output a tool call block, the system will run the command and return the result to you in the next turn as:
-<<RESULT: result_json>>
+User: ""Create a Sprite2D node named Background""
+Your entire response:
+<CALL>
+{{""tool"": ""create_2d_node"", ""node_type"": ""Sprite2D"", ""node_name"": ""Background""}}
+</CALL>
 
-- If you need to chain multiple actions to satisfy a user request (e.g. creating a node and then setting its position), perform them one at a time. Send the first tool call, wait for the `<<RESULT:...>>` response, and then send the next tool call.
-- Once all actions are completed successfully and you have reached the final state, summarize the actions and results in a final conversational response to the user (no `<<CALL:...>>` tags).
+User: ""Create a new scene called Character.tscn with a Node2D root""
+Your entire response:
+<CALL>
+{{""tool"": ""create_new_scene"", ""scene_path"": ""res://Character.tscn"", ""root_type"": ""Node2D"", ""root_name"": ""Character""}}
+</CALL>
+
+User: ""Save the scene""
+Your entire response:
+<CALL>
+{{""tool"": ""save_scene""}}
+</CALL>
+
+### Handling Tool Results
+After you output a <CALL> block, the system will execute it and return:
+<RESULT>
+result_json
+</RESULT>
+
+- If you need multiple tool calls to complete a request, do them ONE AT A TIME. Output one <CALL> block, wait for the <RESULT>, then output the next.
+- Once all actions are done, write a short conversational summary of what was accomplished. No <CALL> tags in this final reply.
 
 ---
-### Available Tools (JSON Schema)
+### Available Tools
 {toolsJson}";
     }
 
@@ -460,37 +479,77 @@ When you output a tool call block, the system will run the command and return th
             while (keepGoing && turnCount < 10)
             {
                 turnCount++;
-                
+
                 // Send the message to ChatService and wait for a response
-                // We pass keepSession = true for subsequent tool result updates
                 string reply = await _agent.SendMessageAsync(currentMessage, false, "gemini", keepSession);
-                keepSession = true; // subsequent loops run in the same session
+                keepSession = true;
+
+                // Debug: log the raw AI response so we can see exactly what was returned
+                GD.Print($"[GodotMCP] AI raw reply (turn {turnCount}): {reply}");
 
                 Match match = ToolCallRegex.Match(reply);
                 if (match.Success)
                 {
-                    string toolName = match.Groups[1].Value;
-                    string argsJson = match.Groups[2].Value.Trim();
+                    // Extract the JSON blob inside the <CALL>...</CALL> tags
+                    string callJson = match.Groups[1].Value.Trim();
 
-                    // Display any text the AI wrote before the tool call
+                    GD.Print($"[GodotMCP] Extracted call JSON: {callJson}");
+
+                    // Parse the JSON to extract the tool name and build the args object
+                    Dictionary<string, JsonElement>? callObj;
+                    try
+                    {
+                        callObj = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(callJson);
+                    }
+                    catch (Exception jsonEx)
+                    {
+                        AppendMessage("error", $"Tool call JSON was malformed: {jsonEx.Message}\nRaw: {callJson}");
+                        keepGoing = false;
+                        break;
+                    }
+
+                    if (callObj == null || !callObj.ContainsKey("tool"))
+                    {
+                        AppendMessage("error", $"Tool call missing \"tool\" key. Raw: {callJson}");
+                        keepGoing = false;
+                        break;
+                    }
+
+                    string toolName = callObj["tool"].GetString() ?? "";
+
+                    // Build args as a new JSON object without the "tool" key
+                    callObj.Remove("tool");
+                    string argsJson = JsonSerializer.Serialize(callObj);
+
+                    // Display any text the AI wrote before/after the tool call
                     string cleanReply = ToolCallRegex.Replace(reply, "").Trim();
                     if (!string.IsNullOrEmpty(cleanReply))
                     {
                         AppendMessage("ai", cleanReply);
                     }
 
-                    AppendMessage("tool", $"Calling {toolName} with: {argsJson}");
+                    AppendMessage("tool", $"→ {toolName}({argsJson})");
 
                     // Execute the tool
-                    string toolResult = await _tools.ExecuteAsync(toolName, argsJson);
-                    AppendMessage("tool", $"Result: {toolResult}");
+                    string toolResult;
+                    try
+                    {
+                        toolResult = await _tools.ExecuteAsync(toolName, argsJson);
+                    }
+                    catch (Exception toolEx)
+                    {
+                        toolResult = JsonSerializer.Serialize(new { error = toolEx.Message });
+                    }
 
-                    // Feed the tool result back into the agent
-                    currentMessage = $"<<RESULT: {toolResult}>>";
+                    GD.Print($"[GodotMCP] Tool result: {toolResult}");
+                    AppendMessage("tool", $"← {toolResult}");
+
+                    // Feed the tool result back
+                    currentMessage = $"<RESULT>\n{toolResult}\n</RESULT>";
                 }
                 else
                 {
-                    // AI responded with no tool calls. We are done!
+                    // No tool call — done
                     AppendMessage("ai", reply);
                     keepGoing = false;
                 }
