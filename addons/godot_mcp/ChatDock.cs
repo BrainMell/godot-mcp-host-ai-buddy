@@ -140,6 +140,15 @@ You must dynamically choose between two distinct modes of operation depending on
    - **Trigger**: The user requests an action inside the editor (e.g., ""create a node"", ""delete the Player"", ""save the scene"", ""list files"").
    - **Behavior**: Your response **MUST contain ONLY the <CALL> block and absolutely nothing else**. No introduction, no explanation, no filler text before or after it.
 
+   STRICT RULE: When you are in Action Mode, your ENTIRE response must be exactly one <CALL> block. No introduction. No explanation. No text before or after the tags. Writing any text outside <CALL>...</CALL> while in Action Mode is an error.
+
+   WRONG (never do this):
+     Sure! I'll create that node for you.
+     <CALL>{{""tool"": ""create_node"", ""node_type"": ""Node2D""}}</CALL>
+
+   CORRECT:
+     <CALL>{{""tool"": ""create_node"", ""node_type"": ""Node2D""}}</CALL>
+
 ### Tool Call Format
 In **Action Mode**, your ENTIRE response must be exactly this — nothing more:
 
@@ -507,6 +516,14 @@ result_json
 
         try
         {
+            // Issue 5: Add session health re-prime check
+            if (_sessionPrimed && _agent != null && !_agent.IsSessionHealthy())
+            {
+                AppendMessage("system", "session lost — re-priming...");
+                _sessionPrimed = false;
+                _sessionActive = false;
+            }
+
             // --- Session priming --------------------------------------------
             // If this is the very first message of this session, send the
             // system prompt alone first so Gemini can absorb its role without
@@ -536,10 +553,32 @@ result_json
 
                 // Send the message to ChatService and wait for a response
                 // Always keepSession = true after priming so we stay in the same conversation
-                string reply = await _agent.SendMessageAsync(currentMessage, false, "gemini", keepSession: true);
+                string reply = await _agent!.SendMessageAsync(currentMessage, false, "gemini", keepSession: true);
 
                 // Debug: log the raw AI response so we can see exactly what was returned
                 GD.Print($"[GodotMCP] AI raw reply (turn {turnCount}): {reply}");
+
+                // Issue 1: Extract display text and print tool statuses
+                string displayText = ToolCallRegex.Replace(reply, "").Trim();
+
+                foreach (Match m in ToolCallRegex.Matches(reply))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(m.Groups[1].Value.Trim());
+                        var toolName = doc.RootElement.GetProperty("tool").GetString();
+                        AppendMessage("tool", $"⚙ {toolName}...");
+                    }
+                    catch
+                    {
+                        AppendMessage("tool", "⚙ executing...");
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(displayText))
+                {
+                    AppendMessage("assistant", displayText);
+                }
 
                 Match match = ToolCallRegex.Match(reply);
                 if (match.Success)
@@ -575,13 +614,6 @@ result_json
                     callObj.Remove("tool");
                     string argsJson = JsonSerializer.Serialize(callObj);
 
-                    // Display any text the AI wrote before/after the tool call
-                    string cleanReply = ToolCallRegex.Replace(reply, "").Trim();
-                    if (!string.IsNullOrEmpty(cleanReply))
-                    {
-                        AppendMessage("ai", cleanReply);
-                    }
-
                     AppendMessage("tool", $"→ {toolName}({argsJson})");
 
                     // Execute the tool
@@ -598,13 +630,13 @@ result_json
                     GD.Print($"[GodotMCP] Tool result: {toolResult}");
                     AppendMessage("tool", $"← {toolResult}");
 
-                    // Feed the tool result back
-                    currentMessage = $"<RESULT>\n{toolResult}\n</RESULT>";
+                    // Issue 2: Prefix the result message so Gemini knows it is tool output
+                    currentMessage = "TOOL RESULT (do not reply to this directly — continue your task):\n" +
+                                     $"<RESULT>\n{toolResult}\n</RESULT>";
                 }
                 else
                 {
                     // No tool call — done
-                    AppendMessage("ai", reply);
                     keepGoing = false;
                 }
             }
@@ -641,7 +673,7 @@ result_json
             prefixColor = UserRoleColor;
             isDim = false;
         }
-        else if (role == "ai")
+        else if (role == "ai" || role == "assistant")
         {
             prefix = "ai";
             prefixColor = AiRoleColor;
@@ -692,11 +724,17 @@ result_json
         }
         string bodyHex = ColorToHex(bodyColor);
 
+        string bodyText = "[color=" + bodyHex + "]" + safe + "[/color]";
+        if (role == "tool")
+        {
+            bodyText = "[i]" + bodyText + "[/i]";
+        }
+
         // Append to the output using BBCode markup
         // Format: [color=#hex][b]prefix[/b][/color]  [color=#hex]message[/color]\n
         _output.AppendText(
             "[color=" + prefixHex + "][b]" + prefix + "[/b][/color]  " +
-            "[color=" + bodyHex + "]" + safe + "[/color]\n");
+            bodyText + "\n");
     }
 
     // Convert a Godot Color to a hex string like "#FF8C33"

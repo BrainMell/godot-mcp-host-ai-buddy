@@ -187,31 +187,64 @@ public class ChatService : IDisposable
             return "Error: Message cannot be empty for Gemini.";
         }
 
-        // Click into the text area (Gemini requires this before typing)
-        await _page.Locator("[data-test-id=\"textarea-inner\"]")
-                   .GetByRole(AriaRole.Paragraph)
-                   .ClickAsync();
+        // Locate the prompt text box (try several semantic options to ensure stability)
+        ILocator textBox = _page.GetByRole(AriaRole.Textbox, new() { Name = "Prompt", Exact = false });
+        if (await textBox.CountAsync() == 0)
+            textBox = _page.GetByRole(AriaRole.Textbox, new() { Name = "Message", Exact = false });
+        if (await textBox.CountAsync() == 0)
+            textBox = _page.GetByRole(AriaRole.Textbox, new() { Name = "Enter a prompt", Exact = false });
+        if (await textBox.CountAsync() == 0)
+            textBox = _page.GetByRole(AriaRole.Textbox);
 
-        // Type the message into the input box
-        var textBox = _page.GetByRole(AriaRole.Textbox, new() { Name = "Enter a prompt for Gemini" });
-        await textBox.FillAsync(message);
+        await textBox.First.ClickAsync();
+        await textBox.First.FillAsync(message);
 
         // Count existing response containers BEFORE sending so we can
         // identify which one is new after the message is sent
-        var responseCount = await _page.Locator(".container").CountAsync();
+        var responseLocator = _page.Locator("message-content");
+        bool useMessageContent = await responseLocator.CountAsync() > 0;
+        if (!useMessageContent)
+        {
+            responseLocator = _page.Locator(".container"); // fallback to class only if message-content tag is missing
+        }
+        var responseCount = await responseLocator.CountAsync();
 
-        // Click the send button
-        var textButton = _page.GetByRole(AriaRole.Button, new() { Name = "Send message" });
-        await textButton.ClickAsync();
+        // Locate the send button
+        ILocator textButton = _page.GetByRole(AriaRole.Button, new() { Name = "Send message", Exact = false });
+        if (await textButton.CountAsync() == 0)
+            textButton = _page.GetByRole(AriaRole.Button, new() { Name = "Send", Exact = false });
+        if (await textButton.CountAsync() == 0)
+            textButton = _page.Locator("button[aria-label*='Send' i]");
+
+        await textButton.First.ClickAsync();
 
         // Wait for the new response container to appear in the DOM
-        var latestResponseLocator = _page.Locator(".container").Nth(responseCount);
+        var latestResponseLocator = responseLocator.Nth(responseCount);
         await latestResponseLocator.WaitForAsync(new() { State = WaitForSelectorState.Attached });
+
+        // Explicitly wait for some initial text to start streaming to avoid premature empty reads
+        string containerText = "";
+        var startDeadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < startDeadline && !_cts.Token.IsCancellationRequested)
+        {
+            containerText = await latestResponseLocator.TextContentAsync() ?? "";
+            if (!string.IsNullOrEmpty(containerText.Trim()))
+            {
+                break;
+            }
+            try
+            {
+                await Task.Delay(200, _cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
 
         // Poll until the response text stabilizes (Gemini streams its output).
         // Hard timeout of 90 seconds to prevent hanging forever.
         // Also respects _cts so Dispose() unblocks this loop immediately.
-        string containerText = "";
         string previousText  = "";
         int stabilityCounter = 0;
         var deadline = DateTime.UtcNow.AddSeconds(90);
@@ -233,7 +266,7 @@ public class ChatService : IDisposable
             if (!string.IsNullOrEmpty(containerText) && containerText == previousText)
             {
                 stabilityCounter++;
-                if (stabilityCounter >= 2) break; // stable for 1 full second — done
+                if (stabilityCounter >= 3) break; // stable for 1.5 seconds — done
             }
             else
             {
@@ -248,6 +281,13 @@ public class ChatService : IDisposable
         }
 
         return containerText;
+    }
+
+    public bool IsSessionHealthy()
+    {
+        if (_page == null) return false;
+        var url = _page.Url ?? "";
+        return url.Contains("gemini.google.com") && !url.Contains("signin");
     }
 
     private async Task<string> SendMessageToZaiAsync(string message)
