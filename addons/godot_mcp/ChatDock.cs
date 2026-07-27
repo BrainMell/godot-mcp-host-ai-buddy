@@ -52,9 +52,9 @@ public partial class ChatDock : Control
     private bool _sessionActive = false;
     private bool _sessionPrimed = false;
 
-    // Tool call parser: matches <CALL>{...json...}</CALL>
+    // Tool call parser: matches [CALL]{...json...}[/CALL]
     // The JSON object must have a "tool" key (tool name) and optionally other keys as args.
-    private static readonly Regex ToolCallRegex = new Regex(@"<CALL>([\ \s\S]*?)</CALL>", RegexOptions.Compiled);
+    private static readonly Regex ToolCallRegex = new Regex(@"\[CALL\]([\ \s\S]*?)\[/CALL\]", RegexOptions.Compiled);
 
     // -- Color palette (muted, terminal-flavored) --------------------------
     // These are RGB values in the 0.0 to 1.0 range
@@ -134,62 +134,62 @@ You must dynamically choose between two distinct modes of operation depending on
 
 1. **CONVERSATIONAL MODE**:
    - **Trigger**: The user is asking questions, seeking advice, asking about your capabilities, requesting a listing of tools, or discussing game logic.
-   - **Behavior**: Respond in normal, helpful, conversational text. Explain your answers clearly. Do NOT output any <CALL> blocks.
+   - **Behavior**: Respond in normal, helpful, conversational text. Explain your answers clearly. Do NOT output any [CALL] blocks.
 
 2. **ACTION MODE**:
    - **Trigger**: The user requests an action inside the editor (e.g., ""create a node"", ""delete the Player"", ""save the scene"", ""list files"").
-   - **Behavior**: Your response **MUST contain ONLY the <CALL> block and absolutely nothing else**. No introduction, no explanation, no filler text before or after it.
+   - **Behavior**: Your response **MUST contain ONLY the [CALL] block and absolutely nothing else**. No introduction, no explanation, no filler text before or after it.
 
-   STRICT RULE: When you are in Action Mode, your ENTIRE response must be exactly one <CALL> block. No introduction. No explanation. No text before or after the tags. Writing any text outside <CALL>...</CALL> while in Action Mode is an error.
+   STRICT RULE: When you are in Action Mode, your ENTIRE response must be exactly one [CALL] block. No introduction. No explanation. No text before or after the tags. Writing any text outside [CALL]...[/CALL] while in Action Mode is an error.
 
    WRONG (never do this):
      Sure! I'll create that node for you.
-     <CALL>{{""tool"": ""create_node"", ""node_type"": ""Node2D""}}</CALL>
+     [CALL]{{""tool"": ""create_node"", ""node_type"": ""Node2D""}}[/CALL]
 
    CORRECT:
-     <CALL>{{""tool"": ""create_node"", ""node_type"": ""Node2D""}}</CALL>
+     [CALL]{{""tool"": ""create_node"", ""node_type"": ""Node2D""}}[/CALL]
 
 ### Tool Call Format
 In **Action Mode**, your ENTIRE response must be exactly this — nothing more:
 
-<CALL>
+[CALL]
 {{""tool"": ""tool_name_here"", ""param1"": ""value1"", ""param2"": ""value2""}}
-</CALL>
+[/CALL]
 
 Rules for the format:
 - `tool` is REQUIRED and must be the exact tool name from the list below.
 - All other keys are the arguments for that tool, matching its parameter names exactly.
-- The JSON inside <CALL> tags must be valid. Use double quotes for all strings.
+- The JSON inside [CALL] tags must be valid. Use double quotes for all strings.
 - Do NOT wrap it in markdown code fences (no ```). Do NOT add any text outside the tags.
 
 #### Concrete Examples:
 
 User: ""Create a Sprite2D node named Background""
 Your entire response:
-<CALL>
+[CALL]
 {{""tool"": ""create_2d_node"", ""node_type"": ""Sprite2D"", ""node_name"": ""Background""}}
-</CALL>
+[/CALL]
 
 User: ""Create a new scene called Character.tscn with a Node2D root""
 Your entire response:
-<CALL>
+[CALL]
 {{""tool"": ""create_new_scene"", ""scene_path"": ""res://Character.tscn"", ""root_type"": ""Node2D"", ""root_name"": ""Character""}}
-</CALL>
+[/CALL]
 
 User: ""Save the scene""
 Your entire response:
-<CALL>
+[CALL]
 {{""tool"": ""save_scene""}}
-</CALL>
+[/CALL]
 
 ### Handling Tool Results
-After you output a <CALL> block, the system will execute it and return:
-<RESULT>
+After you output a [CALL] block, the system will execute it and return:
+[RESULT]
 result_json
-</RESULT>
+[/RESULT]
 
-- If you need multiple tool calls to complete a request, do them ONE AT A TIME. Output one <CALL> block, wait for the <RESULT>, then output the next.
-- Once all actions are done, write a short conversational summary of what was accomplished. No <CALL> tags in this final reply.
+- If you need multiple tool calls to complete a request, do them ONE AT A TIME. Output one [CALL] block, wait for the [RESULT], then output the next.
+- Once all actions are done, write a short conversational summary of what was accomplished. No [CALL] tags in this final reply.
 
 ---
 ### Available Tools
@@ -583,7 +583,7 @@ result_json
                 Match match = ToolCallRegex.Match(reply);
                 if (match.Success)
                 {
-                    // Extract the JSON blob inside the <CALL>...</CALL> tags
+                    // Extract the JSON blob inside the [CALL]...[/CALL] tags
                     string callJson = match.Groups[1].Value.Trim();
 
                     GD.Print($"[GodotMCP] Extracted call JSON: {callJson}");
@@ -632,7 +632,7 @@ result_json
 
                     // Issue 2: Prefix the result message so Gemini knows it is tool output
                     currentMessage = "TOOL RESULT (do not reply to this directly — continue your task):\n" +
-                                     $"<RESULT>\n{toolResult}\n</RESULT>";
+                                     $"[RESULT]\n{toolResult}\n[/RESULT]";
                 }
                 else
                 {

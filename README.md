@@ -47,17 +47,17 @@ You type in the ChatDock
 │  Google Gemini Web App (LLM)                                │
 │                                                             │
 │  6. Receives instructions and decides to trigger a tool.    │
-│  7. Returns XML-wrapped JSON like:                          │
-│     <CALL>                                                  │
+│  7. Returns array-wrapped JSON like:                        │
+│     [CALL]                                                  │
 │       {"tool": "create_new_scene", "root_name": "Player"}   │
-│     </CALL>                                                 │
+│     [/CALL]                                                 │
 └──────────────────────────┬──────────────────────────────────┘
                            │  Raw reply parsed via Regex
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  GodotTools.cs (Schema + HTTP Client)                       │
 │                                                             │
-│  8. Matches the `<CALL>` block and deserializes arguments.  │
+│  8. Matches the `[CALL]` block and deserializes arguments.  │
 │  9. Sends tool call HTTP request to localhost:9876.         │
 └──────────────────────────┬──────────────────────────────────┘
                            │  HTTP POST → localhost:9876
@@ -69,7 +69,7 @@ You type in the ChatDock
 │  11. Executes the actual editor changes (e.g. adding node). │
 │  12. Returns the result JSON back to the ChatDock loop.     │
 └──────────────────────────┬──────────────────────────────────┘
-                           │  Loops result back as <RESULT>
+                           │  Loops result back as [RESULT]
                            ▼
                        (Repeat)
 ```
@@ -80,7 +80,7 @@ You type in the ChatDock
 
 | File | Role |
 |------|------|
-| [ChatDock.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/ChatDock.cs) | **UI & Loop Orchestrator.** Handles the input/output message logs, manages multi-turn agent logic, primes Gemini with system prompt definitions, parses `<CALL>` blocks, and runs tools. |
+| [ChatDock.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/ChatDock.cs) | **UI & Loop Orchestrator.** Handles the input/output message logs, manages multi-turn agent logic, primes Gemini with system prompt definitions, parses `[CALL]` blocks, and runs tools. |
 | [AgentWrapper.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/AgentWrapper.cs) | **Browser Controller.** Interfaces with Playwright. Handles stealth headless configurations, viewport setup, session persistence, login verification, and message sending. |
 | [GodotTools.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/GodotTools.cs) | **Schema + HTTP Router.** Defines the schemas of all Godot editor tools that the AI can call. Standardizes outgoing HTTP requests to the main thread server. |
 | [McpHttpServer.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/McpHttpServer.cs) | **Actual Implementations.** Runs a TCP server on port 9876 on Godot's main thread. Modifies the scene tree and executes EditorInterface calls safely. |
@@ -92,8 +92,8 @@ You type in the ChatDock
 
 The AI automatically chooses between two modes of operation:
 - **Conversational Mode**: For general advice, game design explanations, and questions. The AI replies in clean markdown.
-- **Action Mode**: For modifying the scene or checking files. The AI outputs a single `<CALL>...</CALL>` JSON block.
-  - The loop automatically runs the tool, retrieves the output, and feeds it back as `<RESULT>...</RESULT>`.
+- **Action Mode**: For modifying the scene or checking files. The AI outputs a single `[CALL]...[/CALL]` JSON block.
+  - The loop automatically runs the tool, retrieves the output, and feeds it back as `[RESULT]...[/RESULT]`.
   - The loop runs up to 10 consecutive times so the AI can execute complex chains of actions (like creating a scene, adding multiple nodes, and saving) in one go.
 
 ---

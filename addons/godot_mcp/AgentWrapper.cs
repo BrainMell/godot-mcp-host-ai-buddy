@@ -140,7 +140,16 @@ public class ChatService : IDisposable
     {
         await _page.GotoAsync(_ChatGPT);
 
-        // TODO: add ChatGPT selectors here (textbox, send button, response scraping)
+        bool keepsession = true; // ChatGPT doesn't have a "keep session" option, so we always keep it
+
+        if (!keepsession || !_page.Url.StartsWith("https://chat.openai.com/chat"))
+        {
+            await _page.GotoAsync(_ChatGPT);
+            // Wait for page elements to load
+            await _page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+        }
+
+        bool isSignedOut = await _page.Locator("text=Log in").CountAsync() > 0;
 
         return "Success: Transmitted to ChatGPT.";
     }
