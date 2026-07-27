@@ -13,7 +13,7 @@ namespace GodotMCP;
 //
 // It does three things:
 //   1. Builds the chat interface (input box, output area, send button)
-//   2. When the user sends a message, passes it to GroqAgent.ChatAsync()
+//   2. When the user sends a message, passes it to ChatService.SendMessageAsync()
 //   3. Displays the agent's reply (and any tool calls it made)
 // ---------------------------------------------------------------------------
 
@@ -39,7 +39,7 @@ public partial class ChatDock : Control
 
     // -- State -------------------------------------------------------------
     // ? means this can be null (it's null if the API key wasn't found)
-    private GroqAgent? _agent;
+    private ChatService? _agent;
     private bool _waiting;             // True while we're waiting for a response
 
     // -- Color palette (muted, terminal-flavored) --------------------------
@@ -77,23 +77,21 @@ public partial class ChatDock : Control
     }
 
     // -----------------------------------------------------------------------
-    // TryInitAgent — create the GroqAgent (or show error if no API key)
+    // TryInitAgent — create the ChatService
     // -----------------------------------------------------------------------
 
     private void TryInitAgent()
     {
         try
         {
-            int port = Server?.Port ?? 9876;
-            string serverUrl = $"http://localhost:{port}/";
-            GodotTools tools = new GodotTools(serverUrl);
-            _agent = new GroqAgent(tools);
+            // ChatService doesn't need an API key or tools — the browser does the work
+            _agent = new ChatService();
             SetStatus("ready", StatusOkColor);
         }
         catch (Exception ex)
         {
             AppendMessage("error", ex.Message);
-            SetStatus("no api key", StatusErrColor);
+            SetStatus("error", StatusErrColor);
         }
     }
 
@@ -376,7 +374,7 @@ public partial class ChatDock : Control
 
         if (_agent == null)
         {
-            AppendMessage("error", "agent not initialized - check GROQ_API_KEY in .env");
+            AppendMessage("error", "agent not initialized.");
             return;
         }
 
@@ -387,18 +385,13 @@ public partial class ChatDock : Control
 
         try
         {
-            // Send the message to the agent and wait for a response
-            ChatResult result = await _agent.ChatAsync(text);
+            // Send the message to ChatService and wait for a response
+            // needsBrowser: false = reuse existing browser, true = headless
+            // model: which AI to route to — "gemini", "chatgpt", or "zai"
+            string reply = await _agent.SendMessageAsync(text, false, "gemini");
 
             // Show the AI's reply
-            AppendMessage("ai", result.Reply);
-
-            // If any tools were called, show which ones
-            if (result.ToolsUsed.Count > 0)
-            {
-                string toolList = string.Join(", ", result.ToolsUsed);
-                AppendMessage("tool", "called: " + toolList);
-            }
+            AppendMessage("ai", reply);
 
             SetStatus("ready", StatusOkColor);
         }

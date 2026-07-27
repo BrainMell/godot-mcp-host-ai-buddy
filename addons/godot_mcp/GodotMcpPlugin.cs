@@ -39,7 +39,7 @@ public partial class GodotMcpPlugin : EditorPlugin
     {
         // 1. Create and start the HTTP server
         //    This runs on the main thread and will receive tool execution
-        //    requests from GroqAgent (which runs on a background thread)
+        //    requests from the browser agent (which runs asynchronously)
         _server = new McpHttpServer();
         _server.EditorPlugin = this;
         AddChild(_server);     // Adding as a child means _Process() gets called

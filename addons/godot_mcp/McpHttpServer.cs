@@ -11,16 +11,16 @@ namespace GodotMCP;
 // McpHttpServer — runs inside the Godot editor on the MAIN THREAD
 //
 // WHY THIS EXISTS:
-//   GroqAgent runs on a background async thread (needed so the editor
-//   doesn't freeze while waiting for the Groq API). But Godot's editor APIs
+//   The browser agent runs asynchronously (needed so the editor
+//   doesn't freeze while waiting for the LLM). But Godot's editor APIs
 //   (EditorInterface, SceneTree, node manipulation) are NOT thread-safe —
-//   calling them from a background thread will crash or corrupt state.
+//   calling them from background asynchronous code can crash or corrupt state.
 //
 //   So we use a tiny HTTP server as a thread-boundary handoff:
-//     1. GroqAgent (background thread) sends an HTTP request to localhost:9876
+//     1. The agent sends an HTTP request to localhost:9876
 //     2. This server's _Process() method picks it up (main thread — safe!)
 //     3. The actual Godot API call happens here
-//     4. The response is sent back to GroqAgent
+//     4. The response is sent back to the agent
 //
 // This file has two parts:
 //   - The HTTP server itself (Start, Stop, _Process, HandleRequest)

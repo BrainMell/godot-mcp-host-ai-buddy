@@ -264,7 +264,7 @@ public class GodotTools
     }
 
     // =======================================================================
-    // ExecuteAsync — called by GroqAgent when the LLM wants to call a tool
+    // ExecuteAsync — called when the LLM wants to call a tool
     //
     // This method receives:
     //   - toolName: e.g. "create_node"
