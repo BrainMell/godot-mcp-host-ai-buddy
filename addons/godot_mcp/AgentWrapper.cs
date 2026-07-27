@@ -135,8 +135,14 @@ public class ChatService
     {
         await _page.GotoAsync(_Gemini);
 
-        // Check if we were redirected away from the app (not logged in or session expired)
-        if (!_page.Url.StartsWith("https://gemini.google.com/app"))
+        // Wait for page elements to load
+        await _page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+
+        // Check if we are signed out (if either of the Sign In buttons are present)
+        bool isSignedOut = await _page.Locator("[data-test-id=\"sign-in-button\"]").CountAsync() > 0
+                        || await _page.Locator("[data-test-id=\"mavatar-sign-in-icon-button\"]").CountAsync() > 0;
+
+        if (isSignedOut)
         {
             await _context.CloseAsync();
             _playwright.Dispose();
