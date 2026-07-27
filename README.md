@@ -1,18 +1,19 @@
 # GodotMCP Host AI Buddy
 
-A Godot 4 editor plugin that lets you control the Godot editor through natural language.
-Type in the chat dock, and the AI calls real editor APIs — creating scenes, adding nodes,
-setting properties — right in front of you.
+A Godot 4 editor plugin that lets you control the Godot editor through natural language using browser-driven Google Gemini. Type in the chat dock, and the AI calls real editor APIs — creating scenes, adding nodes, setting properties — right in front of you.
 
 ---
 
 ## Quick start
 
-1. Clone this repo and open it in Godot 4
-2. Enable the plugin: **Project → Project Settings → Plugins → GodotMCP → Enable**
-3. Copy `.env.example` to `.env` and paste your [Groq API key](https://console.groq.com)
-4. Build the C# solution (`Ctrl+Shift+B`)
-5. The **AI Buddy** dock appears at the bottom of the editor — start chatting
+1. Clone this repo and open it in Godot 4.
+2. Build the C# solution in the editor or run `dotnet build` in the root folder.
+3. Enable the plugin: **Project → Project Settings → Plugins → GodotMCP → Enable**.
+4. The first time you send a message, a headed Chromium window will open:
+   - **Log into your Google account** on the Gemini page.
+   - Once signed in and you see the chat interface, close the browser or return to Godot.
+   - All subsequent prompts will run in **stealth headless mode** in the background, utilizing your saved session profile.
+5. The **AI Buddy** dock appears at the bottom of the editor — start chatting!
 
 ---
 
@@ -25,59 +26,52 @@ You type in the ChatDock
         │
         ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  GroqAgent.cs                                               │
+│  ChatDock.cs (Orchestrator)                                 │
 │                                                             │
-│  1. Builds a JSON request to the Groq API containing:      │
-│     - Your message                                          │
-│     - The full list of available tools (from GodotTools)   │
+│  1. Primes the session on first run with the system prompt   │
+│     and available tools schema.                             │
+│  2. Sends user prompts and loops tool results.              │
 └──────────────────────────┬──────────────────────────────────┘
-                           │  HTTP POST → api.groq.com
+                           │  SendMessageAsync()
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Groq (LLM in the cloud)                                    │
+│  AgentWrapper.cs (ChatService)                              │
 │                                                             │
-│  2. Reads your message + tool list                          │
-│  3. Decides which tool to call (if any)                     │
-│  4. Returns JSON like:                                      │
-│     {                                                       │
-│       "tool_calls": [{                                      │
-│         "function": {                                       │
-│           "name": "create_new_scene",                       │
-│           "arguments": "{\"scene_path\":\"res://Main.tscn\"}"│
-│         }                                                   │
-│       }]                                                    │
-│     }                                                       │
+│  3. Automates a Chromium instance via Playwright.           │
+│  4. Enters stealth headless mode after initial login.       │
+│  5. Inputs prompts into Gemini and extracts streamed replies.│
 └──────────────────────────┬──────────────────────────────────┘
-                           │  tool_calls JSON back
+                           │  Browser UI Automation
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  GroqAgent.cs (back in Godot)                               │
+│  Google Gemini Web App (LLM)                                │
 │                                                             │
-│  5. Detects tool_calls in the response                      │
-│  6. Calls GodotTools.ExecuteAsync("create_new_scene", ...)  │
+│  6. Receives instructions and decides to trigger a tool.    │
+│  7. Returns XML-wrapped JSON like:                          │
+│     <CALL>                                                  │
+│       {"tool": "create_new_scene", "root_name": "Player"}   │
+│     </CALL>                                                 │
+└──────────────────────────┬──────────────────────────────────┘
+                           │  Raw reply parsed via Regex
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  GodotTools.cs (Schema + HTTP Client)                       │
+│                                                             │
+│  8. Matches the `<CALL>` block and deserializes arguments.  │
+│  9. Sends tool call HTTP request to localhost:9876.         │
 └──────────────────────────┬──────────────────────────────────┘
                            │  HTTP POST → localhost:9876
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  McpHttpServer.cs  (also inside Godot, main thread)         │
+│  McpHttpServer.cs (Main Godot Thread Server)                │
 │                                                             │
-│  7. Receives request via its TCP server                     │
-│  8. Dispatch() routes "create_new_scene" to CreateNewScene()│
-│  9. Calls EditorInterface.Singleton.OpenSceneFromPath(...)  │
-│     ← this is the REAL editor API call                      │
-│  10. Returns result JSON                                    │
+│  10. Receives request and dispatches to Godot's API.        │
+│  11. Executes the actual editor changes (e.g. adding node). │
+│  12. Returns the result JSON back to the ChatDock loop.     │
 └──────────────────────────┬──────────────────────────────────┘
-                           │  result back to GroqAgent
+                           │  Loops result back as <RESULT>
                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│  GroqAgent.cs                                               │
-│                                                             │
-│  11. Sends tool result back to Groq as a "tool" message     │
-│  12. Groq generates a final human-readable reply            │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-                   ChatDock shows the reply
+                       (Repeat)
 ```
 
 ---
@@ -86,37 +80,31 @@ You type in the ChatDock
 
 | File | Role |
 |------|------|
-| `ChatDock.cs` | The UI panel. Sends your message to `GroqAgent`, displays replies. |
-| `GroqAgent.cs` | Orchestrator. Talks to Groq, detects `tool_calls` JSON, fires `GodotTools.ExecuteAsync`, feeds results back to Groq. |
-| `GodotTools.cs` | **Schema + HTTP router.** Tells the LLM what tools exist (name, description, params). Routes tool calls to the local HTTP server. |
-| `McpHttpServer.cs` | **Actual implementations.** Runs a TCP server on port 9876 inside the editor. Calls real Godot/EditorInterface APIs. |
-| `GodotMcpPlugin.cs` | Plugin entry point. Spins up the HTTP server and chat dock when the editor loads. |
-
-### Why is there an HTTP server for a local call?
-
-`GroqAgent` runs on a **C# async/await task thread** (needed for non-blocking
-HTTP calls to Groq). Godot's `EditorInterface`, `SceneTree`, and most editor
-APIs are **not thread-safe** — touching them from a background thread will crash
-or corrupt state.
-
-`McpHttpServer._Process()` is called by Godot's **main game loop thread**, so
-it's always safe to call editor APIs there. The HTTP hop over localhost is the
-thread-boundary handoff: the async thread posts a request, the main thread
-receives it via `_Process`, executes the editor call, and writes the response back.
-
-### The LLM never runs any code
-
-Groq just outputs structured JSON. It has no ability to execute anything itself.
-The plugin reads `tool_calls` from the response and decides whether to act on it.
-You could add an approval step before any tool executes — the architecture makes
-that trivial.
+| [ChatDock.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/ChatDock.cs) | **UI & Loop Orchestrator.** Handles the input/output message logs, manages multi-turn agent logic, primes Gemini with system prompt definitions, parses `<CALL>` blocks, and runs tools. |
+| [AgentWrapper.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/AgentWrapper.cs) | **Browser Controller.** Interfaces with Playwright. Handles stealth headless configurations, viewport setup, session persistence, login verification, and message sending. |
+| [GodotTools.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/GodotTools.cs) | **Schema + HTTP Router.** Defines the schemas of all Godot editor tools that the AI can call. Standardizes outgoing HTTP requests to the main thread server. |
+| [McpHttpServer.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/McpHttpServer.cs) | **Actual Implementations.** Runs a TCP server on port 9876 on Godot's main thread. Modifies the scene tree and executes EditorInterface calls safely. |
+| [GodotMcpPlugin.cs](file:///home/mellow/godot-mcp-host-ai-buddy/addons/godot_mcp/GodotMcpPlugin.cs) | **Plugin Entry Point.** Initializes the HTTP server and mounts the chat dock panel on editor startup, cleaning them up on exit. |
 
 ---
 
-## Adding new tools
+## Tool Execution Loop
 
-See **[docs/ADDING_TOOLS.md](docs/ADDING_TOOLS.md)** for the step-by-step guide.
-The short version: edit two files in four places, rebuild, done.
+The AI automatically chooses between two modes of operation:
+- **Conversational Mode**: For general advice, game design explanations, and questions. The AI replies in clean markdown.
+- **Action Mode**: For modifying the scene or checking files. The AI outputs a single `<CALL>...</CALL>` JSON block.
+  - The loop automatically runs the tool, retrieves the output, and feeds it back as `<RESULT>...</RESULT>`.
+  - The loop runs up to 10 consecutive times so the AI can execute complex chains of actions (like creating a scene, adding multiple nodes, and saving) in one go.
+
+---
+
+## Features
+
+- **No API Keys Needed**: Reuses your standard logged-in Google browser session on Gemini.
+- **Stealth Headless Mode**: Runs silently in the background after initial setup.
+- **Assembly Reload Tolerant**: Implements active cancellation tokens and strict process cleanup on plugin unload to prevent Godot from hanging when compiling.
+- **Copy Log**: Instant one-click clipboard copying of the chat log (automatically stripping BBCode formatting).
+- **Session Priming**: System instructions and schemas are sent once at the start of a conversation, keeping subsequent user prompts lightweight and fast.
 
 ---
 
@@ -124,24 +112,24 @@ The short version: edit two files in four places, rebuild, done.
 
 | Tool | What it does |
 |------|--------------|
-| `ping_godot` | Health check — is the plugin running? |
-| `get_editor_state` | Is a scene open? What's its name/path? |
-| `get_scene_tree` | Full node tree of the current scene |
-| `get_selected_nodes` | Which nodes are selected in the editor |
-| `create_node` | Create any node type in the current scene |
-| `create_2d_node` | Create a 2D node with optional starting position |
-| `delete_node` | Remove a node by path |
-| `get_node_properties` | Inspect all properties on a node |
-| `set_node_property` | Set a property (handles Vector2, bool, float, string) |
-| `save_scene` | Save the current scene to disk |
-| `list_project_files` | List files under any `res://` directory |
-| `create_new_scene` | Create a new `.tscn` file and open it in the editor |
-| `open_scene` | Open an existing scene file |
+| `ping_godot` | Health check — is the server responding? |
+| `get_editor_state` | Retrieves open scene name and path. |
+| `get_scene_tree` | Lists the entire node hierarchy of the active scene. |
+| `get_selected_nodes` | Tells which nodes are currently highlighted. |
+| `create_node` | Generates a new node of any Type in the scene. |
+| `create_2d_node` | Utility helper to instantiate 2D nodes at coordinates. |
+| `delete_node` | Frees a node by its path. |
+| `get_node_properties` | Inspects properties on a selected node. |
+| `set_node_property` | Edits properties (Vector2, floats, strings, booleans). |
+| `save_scene` | Saves current scene changes. |
+| `list_project_files` | Scans directories under `res://`. |
+| `create_new_scene` | Builds a new scene with root type and opens it. |
+| `open_scene` | Switches the editor to open a different scene file. |
 
 ---
 
 ## Tech stack
 
-- **Godot 4** (C# / .NET)
-- **Groq API** (`llama-3.3-70b-versatile`) — fast, free tier available
-- No external C# packages — only `System.Net.Http` and `System.Text.Json` from the BCL
+- **Godot 4** (C# / .NET 8+)
+- **Playwright for .NET** (Chromium browser controller)
+- **Google Gemini Web App** (Free-tier web interface)
