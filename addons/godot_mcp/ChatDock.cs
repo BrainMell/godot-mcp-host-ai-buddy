@@ -82,6 +82,14 @@ public partial class ChatDock : Control
         AppendMessage("system", "try: \"create a Node2D called Player at [200, 150]\"");
     }
 
+    public override void _Notification(int what)
+    {
+        if (what == NotificationPredelete)
+        {
+            _agent?.Dispose();
+        }
+    }
+
     // -----------------------------------------------------------------------
     // TryInitAgent — create the ChatService and GodotTools
     // -----------------------------------------------------------------------

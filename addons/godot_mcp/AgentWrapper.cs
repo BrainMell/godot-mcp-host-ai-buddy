@@ -19,7 +19,7 @@ namespace GodotMCP;
 //   var service = new ChatService();
 //   string reply = await service.SendMessageAsync("hello", false, "gemini");
 // ---------------------------------------------------------------------------
-public class ChatService
+public class ChatService : IDisposable
 {
     // -- Playwright state (one browser shared across all AI sessions) --------
     private IPlaywright _playwright = null!;  // set in InitializePlaywrightAsync
@@ -289,6 +289,23 @@ public class ChatService
             case "zai":     return await SendMessageToZaiAsync(message);
             default:
                 throw new ArgumentException($"Unknown model: '{model}'. Use \"gemini\", \"chatgpt\", or \"zai\".");
+        }
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            _context?.CloseAsync().GetAwaiter().GetResult();
+        }
+        catch {}
+        finally
+        {
+            _playwright?.Dispose();
+            _playwright = null!;
+            _context = null!;
+            _page = null!;
+            _stateOfBrowser = null;
         }
     }
 }
