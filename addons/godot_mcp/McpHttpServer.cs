@@ -697,53 +697,100 @@ public partial class McpHttpServer : Node
         }
     }
 
-    // -- Get all properties of a node --------------------------------------
+    // -- Get all properties of a node — with rich type metadata ---------------
+    //
+    // Returns a list of property descriptors so the AI knows:
+    //   - the current value
+    //   - the Godot Variant type (e.g. "Vector2", "Color", "Int")
+    //   - the hint category (e.g. "Enum", "Range", "File", "None")
+    //   - the hint_string (e.g. enum names "Inherit,Always,Pausable" or range "0,100,1")
+    //
+    // This lets the AI pick correct values instead of guessing.
     private string GetNodeProperties(JsonElement p)
     {
         Node root = EditorInterface.Singleton.GetEditedSceneRoot();
         if (root == null)
-        {
             return Serialize(new { error = "No scene open" });
-        }
 
         string path = GetStr(p, "path", "");
         Node node = root.GetNodeOrNull(path);
         if (node == null)
-        {
             return Serialize(new { error = "Node not found: " + path });
-        }
 
-        // Iterate over all properties the node exposes
-        // and build a dictionary of { property_name: value_as_string }
-        Dictionary props = new Dictionary();
-        Godot.Collections.Array<Godot.Collections.Dictionary> propertyList = node.GetPropertyList();
+        var propertyList = node.GetPropertyList();
+        var result = new List<object>();
 
         for (int i = 0; i < propertyList.Count; i++)
         {
-            Godot.Collections.Dictionary propInfo = (Godot.Collections.Dictionary)propertyList[i];
+            var info = propertyList[i];
 
-            // propInfo["name"] returns a Variant — we need to cast it to string
-            string pname = propInfo["name"].AsString();
+            string pname      = info["name"].AsString();
+            int    typeInt    = info["type"].AsInt32();
+            int    hintInt    = info["hint"].AsInt32();
+            string hintString = info["hint_string"].AsString();
+            int    usage      = info["usage"].AsInt32();
 
-            // Skip internal/hidden properties (they start with underscore)
-            if (pname.StartsWith("_"))
+            // PropertyUsageFlags: 128 = EDITOR (internal), 512 = INTERNAL, 4 = CATEGORY
+            // Skip properties that aren't useful for the AI to interact with
+            const int USAGE_STORAGE   = 2;
+            const int USAGE_EDITOR    = 4;    // visible in inspector
+            const int USAGE_CATEGORY  = 128;
+            const int USAGE_GROUP     = 256;
+            const int USAGE_SUBGROUP  = 512;
+            const int USAGE_INTERNAL  = 8192;
+
+            bool isVisible = (usage & USAGE_EDITOR) != 0 || (usage & USAGE_STORAGE) != 0;
+            bool isNoise   = (usage & USAGE_CATEGORY) != 0 || (usage & USAGE_GROUP) != 0
+                          || (usage & USAGE_SUBGROUP) != 0 || (usage & USAGE_INTERNAL) != 0;
+
+            if (!isVisible || isNoise) continue;
+            if (pname.StartsWith("_")) continue;
+            if (typeInt == 0) continue; // Variant.Type.Nil — unreadable
+
+            // Map the Godot Variant.Type int to a human-readable name
+            string typeName = ((Variant.Type)typeInt).ToString();
+
+            // Map PropertyHint int to a human-readable category
+            // Common values: 0=None, 1=Range, 2=ExpRange, 4=Enum, 17=File, 18=Dir
+            string hintName = hintInt switch
             {
-                continue;
-            }
+                0  => "None",
+                1  => "Range",
+                2  => "Range",
+                4  => "Enum",
+                17 => "File",
+                18 => "Dir",
+                19 => "GlobalFile",
+                20 => "GlobalDir",
+                24 => "NodeType",
+                28 => "Color",
+                _  => "Other"
+            };
 
+            // Read current value
+            string currentValue = "";
             try
             {
-                Variant propValue = node.Get(pname);
-                props[pname] = propValue.ToString();
+                Variant v = node.Get(pname);
+                currentValue = v.ToString();
             }
-            catch
+            catch { /* unreadable — leave empty */ }
+
+            var entry = new
             {
-                // Some properties can't be read — skip them silently
-            }
+                name         = pname,
+                type         = typeName,
+                hint         = hintName,
+                hint_string  = hintString,
+                value        = currentValue
+            };
+
+            result.Add(entry);
         }
 
-        return Serialize(new { node = path, properties = props });
+        return Serialize(new { node = path, node_class = node.GetClass(), properties = result });
     }
+
 
     // -- Save the current scene to disk ------------------------------------
     private string SaveScene()
