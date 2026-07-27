@@ -64,13 +64,13 @@ Add your tool to the list using the `tools.Add(Tool(...))` pattern:
 tools.Add(Tool(
     name: "move_node",
     description: "Move a node to a new position. Works on Node2D and Control-derived nodes. " +
-                 "For 3D nodes, use set_node_property with 'position' and a Vector3.",
+				 "For 3D nodes, use set_node_property with 'position' and a Vector3.",
     parameters: new
     {
         type = "object",
         properties = new
         {
-            path = Prop("string", "Node path. E.g. 'Player' or 'Player/Sprite2D'"),
+			path = Prop("string", "Node path. E.g. 'Player' or 'Player/Sprite2D'"),
             position = new
             {
                 type = "array",
@@ -135,7 +135,7 @@ Open `McpHttpServer.cs` and find `Dispatch()` (around line 160). Add an
 ```csharp
 else if (action == "move_node")
 {
-    return MoveNode(parameters);
+	return MoveNode(parameters);
 }
 ```
 
@@ -147,67 +147,67 @@ implementations (after `Create2DNode` is a good spot):
 ```csharp
 private string MoveNode(JsonElement p)
 {
-    Node root = EditorInterface.Singleton.GetEditedSceneRoot();
-    if (root == null)
-    {
-        return Serialize(new { error = "No scene open" });
-    }
+	Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+	if (root == null)
+	{
+		return Serialize(new { error = "No scene open" });
+	}
 
-    string path = GetStr(p, "path", "");
-    Node node = root.GetNodeOrNull(path);
-    if (node == null)
-    {
-        return Serialize(new { error = "Node not found: " + path });
-    }
+	string path = GetStr(p, "path", "");
+	Node node = root.GetNodeOrNull(path);
+	if (node == null)
+	{
+		return Serialize(new { error = "Node not found: " + path });
+	}
 
-    // Validate that "position" exists and is an array
-    if (!p.TryGetProperty("position", out JsonElement posEl))
-    {
-        return Serialize(new { error = "position must be a [x, y] array" });
-    }
-    if (posEl.ValueKind != JsonValueKind.Array)
-    {
-        return Serialize(new { error = "position must be a [x, y] array" });
-    }
+	// Validate that "position" exists and is an array
+	if (!p.TryGetProperty("position", out JsonElement posEl))
+	{
+		return Serialize(new { error = "position must be a [x, y] array" });
+	}
+	if (posEl.ValueKind != JsonValueKind.Array)
+	{
+		return Serialize(new { error = "position must be a [x, y] array" });
+	}
 
-    // Read the [x, y] values
-    List<JsonElement> items = new List<JsonElement>();
-    foreach (JsonElement item in posEl.EnumerateArray())
-    {
-        items.Add(item);
-    }
-    if (items.Count < 2)
-    {
-        return Serialize(new { error = "position must have at least 2 elements [x, y]" });
-    }
+	// Read the [x, y] values
+	List<JsonElement> items = new List<JsonElement>();
+	foreach (JsonElement item in posEl.EnumerateArray())
+	{
+		items.Add(item);
+	}
+	if (items.Count < 2)
+	{
+		return Serialize(new { error = "position must have at least 2 elements [x, y]" });
+	}
 
-    float x = (float)items[0].GetDouble();
-    float y = (float)items[1].GetDouble();
-    Vector2 newPos = new Vector2(x, y);
+	float x = (float)items[0].GetDouble();
+	float y = (float)items[1].GetDouble();
+	Vector2 newPos = new Vector2(x, y);
 
-    // Apply the position based on node type
-    if (node is Node2D n2d)
-    {
-        n2d.Position = newPos;
-    }
-    else if (node is Control ctrl)
-    {
-        ctrl.Position = newPos;
-    }
-    else
-    {
-        return Serialize(new
-        {
-            error = "Node '" + path + "' (type " + node.GetClass() + ") does not have a 2D position. " +
+	// Apply the position based on node type
+	if (node is Node2D n2d)
+	{
+		n2d.Position = newPos;
+	}
+	else if (node is Control ctrl)
+	{
+		ctrl.Position = newPos;
+	}
+	else
+	{
+		return Serialize(new
+		{
+			error = "Node '" + path + "' (type " + node.GetClass() + ") does not have a 2D position. " +
                     "Use set_node_property for other node types."
-        });
-    }
+		});
+	}
 
-    return Serialize(new
-    {
-        moved = path,
-        to = new { x = newPos.X, y = newPos.Y }
-    });
+	return Serialize(new
+	{
+		moved = path,
+		to = new { x = newPos.X, y = newPos.Y }
+	});
 }
 ```
 
@@ -342,9 +342,9 @@ When defining tools in `GodotTools.cs`, you can specify different parameter type
   *Or as an enum (restrict to predefined values):*
   ```csharp
   anchor = new { 
-      type = "string", 
-      @enum = new string[] { "top_left", "top_right", "bottom_left", "bottom_right" }, 
-      description = "Anchor preset location" 
+	  type = "string", 
+	  @enum = new string[] { "top_left", "top_right", "bottom_left", "bottom_right" }, 
+	  description = "Anchor preset location" 
   }
   ```
 - **Client Dispatch (`GodotTools.cs`):**
@@ -367,14 +367,14 @@ When defining tools in `GodotTools.cs`, you can specify different parameter type
   ```csharp
   double speed = 1.0;
   if (args.TryGetValue("speed", out var speedEl) && speedEl.ValueKind == JsonValueKind.Number) {
-      speed = speedEl.GetDouble();
+	  speed = speedEl.GetDouble();
   }
   ```
 - **Server Implementation (`McpHttpServer.cs`):**
   ```csharp
   double speed = 1.0;
   if (p.TryGetProperty("speed", out var speedEl) && speedEl.ValueKind == JsonValueKind.Number) {
-      speed = speedEl.GetDouble();
+	  speed = speedEl.GetDouble();
   }
   ```
 
@@ -387,14 +387,14 @@ When defining tools in `GodotTools.cs`, you can specify different parameter type
   ```csharp
   bool visible = true;
   if (args.TryGetValue("visible", out var visEl)) {
-      visible = visEl.ValueKind == JsonValueKind.True;
+	  visible = visEl.ValueKind == JsonValueKind.True;
   }
   ```
 - **Server Implementation (`McpHttpServer.cs`):**
   ```csharp
   bool visible = true;
   if (p.TryGetProperty("visible", out var visEl)) {
-      visible = visEl.ValueKind == JsonValueKind.True;
+	  visible = visEl.ValueKind == JsonValueKind.True;
   }
   ```
 
@@ -402,9 +402,9 @@ When defining tools in `GodotTools.cs`, you can specify different parameter type
 - **Schema (`GodotTools.cs`):**
   ```csharp
   tags = new { 
-      type = "array", 
-      items = new { type = "string" }, 
-      description = "List of node tags" 
+	  type = "array", 
+	  items = new { type = "string" }, 
+	  description = "List of node tags" 
   }
   ```
 - **Client Dispatch (`GodotTools.cs`):**
@@ -416,9 +416,9 @@ When defining tools in `GodotTools.cs`, you can specify different parameter type
   Iterate over the array elements:
   ```csharp
   if (p.TryGetProperty("tags", out JsonElement tagsEl) && tagsEl.ValueKind == JsonValueKind.Array) {
-      foreach (JsonElement tagEl in tagsEl.EnumerateArray()) {
-          string tag = tagEl.GetString() ?? "";
-      }
+	  foreach (JsonElement tagEl in tagsEl.EnumerateArray()) {
+		  string tag = tagEl.GetString() ?? "";
+	  }
   }
   ```
 
@@ -432,9 +432,9 @@ Positions are normally passed as JSON number arrays (e.g., `[x, y]` for 2D, or `
 - **Schema (`GodotTools.cs`):**
   ```csharp
   position = new {
-      type = "array",
-      items = new { type = "number" },
-      description = "2D coordinates as [x, y]"
+	  type = "array",
+	  items = new { type = "number" },
+	  description = "2D coordinates as [x, y]"
   }
   ```
 - **Client Dispatch (`GodotTools.cs`):**
@@ -445,16 +445,16 @@ Positions are normally passed as JSON number arrays (e.g., `[x, y]` for 2D, or `
   ```csharp
   private Vector2 ParseVector2(JsonElement arr)
   {
-      List<JsonElement> items = new List<JsonElement>();
-      foreach (JsonElement item in arr.EnumerateArray()) {
-          items.Add(item);
-      }
-      if (items.Count >= 2) {
-          float x = (float)items[0].GetDouble();
-          float y = (float)items[1].GetDouble();
-          return new Vector2(x, y);
-      }
-      return Vector2.Zero;
+	  List<JsonElement> items = new List<JsonElement>();
+	  foreach (JsonElement item in arr.EnumerateArray()) {
+		  items.Add(item);
+	  }
+	  if (items.Count >= 2) {
+		  float x = (float)items[0].GetDouble();
+		  float y = (float)items[1].GetDouble();
+		  return new Vector2(x, y);
+	  }
+	  return Vector2.Zero;
   }
   ```
 
@@ -462,9 +462,9 @@ Positions are normally passed as JSON number arrays (e.g., `[x, y]` for 2D, or `
 - **Schema (`GodotTools.cs`):**
   ```csharp
   position_3d = new {
-      type = "array",
-      items = new { type = "number" },
-      description = "3D coordinates as [x, y, z]"
+	  type = "array",
+	  items = new { type = "number" },
+	  description = "3D coordinates as [x, y, z]"
   }
   ```
 - **Client Dispatch (`GodotTools.cs`):**
@@ -475,17 +475,17 @@ Positions are normally passed as JSON number arrays (e.g., `[x, y]` for 2D, or `
   ```csharp
   private Vector3 ParseVector3(JsonElement arr)
   {
-      List<JsonElement> items = new List<JsonElement>();
-      foreach (JsonElement item in arr.EnumerateArray()) {
-          items.Add(item);
-      }
-      if (items.Count >= 3) {
-          float x = (float)items[0].GetDouble();
-          float y = (float)items[1].GetDouble();
-          float z = (float)items[2].GetDouble();
-          return new Vector3(x, y, z);
-      }
-      return Vector3.Zero;
+	  List<JsonElement> items = new List<JsonElement>();
+	  foreach (JsonElement item in arr.EnumerateArray()) {
+		  items.Add(item);
+	  }
+	  if (items.Count >= 3) {
+		  float x = (float)items[0].GetDouble();
+		  float y = (float)items[1].GetDouble();
+		  float z = (float)items[2].GetDouble();
+		  return new Vector3(x, y, z);
+	  }
+	  return Vector3.Zero;
   }
   ```
 

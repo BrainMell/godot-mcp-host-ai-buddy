@@ -51,6 +51,7 @@ public partial class ChatDock : Control
     // _sessionPrimed : true = system prompt has already been sent, AI knows its role
     private bool _sessionActive = false;
     private bool _sessionPrimed = false;
+    private string _currentModel = "gemini";
 
     // Tool call parser: matches [CALL]{...json...}[/CALL]
     // The JSON object must have a "tool" key (tool name) and optionally other keys as args.
@@ -203,11 +204,11 @@ result_json
     // -----------------------------------------------------------------------
     private async Task<string> PrimeSessionAsync()
     {
-        // keepSession = false → navigate to a fresh Gemini conversation
+        // keepSession = false → navigate to a fresh AI conversation
         string primeMessage = GetSystemPrompt()
             + "\n\nYou are now set up. Respond only with: READY";
 
-        return await _agent!.SendMessageAsync(primeMessage, false, "gemini", keepSession: false);
+        return await _agent!.SendMessageAsync(primeMessage, false, _currentModel, keepSession: false);
     }
 
     // =======================================================================
@@ -486,6 +487,11 @@ result_json
         inputRow.AddChild(_sendBtn);
     }
 
+    private async void SetModel()
+    {
+        
+    }
+
     // =======================================================================
     // SENDING MESSAGES
     // =======================================================================
@@ -501,6 +507,52 @@ result_json
         if (text == "" || _waiting)
         {
             return;
+        }
+
+        if(text.StartsWith("/"))
+        {
+            // Handle slash commands
+            string command = text.Substring(1).Trim().ToLower();
+            switch(command)
+            {
+                case "clear":
+                    ClearChat();
+                    return;
+                case "copy":
+                    CopyChat();
+                    return;
+                case "model":
+                    AppendMessage("system", "There are currently 3 available models platforms: 'gemini', 'Chatgpt', and 'Zai'.\nUse '/model <model_name>' to switch between them.");
+                    return;
+                case "model gemini":
+                    AppendMessage("system", "Switching to Gemini model...");
+                    _currentModel = "gemini";
+                    _sessionPrimed = false;
+                    _sessionActive = false;
+                    return;
+                case "model chatgpt":
+                    AppendMessage("system", "Switching to ChatGPT model...");
+                    _currentModel = "chatgpt";
+                    _sessionPrimed = false;
+                    _sessionActive = false;
+                    return;
+                case "model zai":
+                    AppendMessage("system", "Switching to Zai model...");
+                    _currentModel = "zai";
+                    _sessionPrimed = false;
+                    _sessionActive = false;
+                    return;
+                case "help":
+                    AppendMessage("system", "Available commands:\n" +
+                        "/clear - Clear the chat output\n" +
+                        "/copy - Copy the chat log to clipboard\n" +
+                        "/model <model_name> - Switch between available models (gemini, Chatgpt, Zai)\n" +
+                        "/help - Show this help message");
+                    return;
+                default:
+                    AppendMessage("error", $"unknown command: {command}");
+                    return;
+            }
         }
 
         if (_agent == null)
@@ -553,7 +605,7 @@ result_json
 
                 // Send the message to ChatService and wait for a response
                 // Always keepSession = true after priming so we stay in the same conversation
-                string reply = await _agent!.SendMessageAsync(currentMessage, false, "gemini", keepSession: true);
+                string reply = await _agent!.SendMessageAsync(currentMessage, false, _currentModel, keepSession: true);
 
                 // Debug: log the raw AI response so we can see exactly what was returned
                 GD.Print($"[GodotMCP] AI raw reply (turn {turnCount}): {reply}");
@@ -614,7 +666,7 @@ result_json
                     callObj.Remove("tool");
                     string argsJson = JsonSerializer.Serialize(callObj);
 
-                    AppendMessage("tool", $"→ {toolName}({argsJson})");
+                    AppendMessage("tool", $"→ {toolName}({Truncate(argsJson, 120)})");
 
                     // Execute the tool
                     string toolResult;
@@ -628,7 +680,7 @@ result_json
                     }
 
                     GD.Print($"[GodotMCP] Tool result: {toolResult}");
-                    AppendMessage("tool", $"← {toolResult}");
+                    AppendMessage("tool", $"← {Truncate(toolResult, 200)}");
 
                     // Issue 2: Prefix the result message so Gemini knows it is tool output
                     currentMessage = "TOOL RESULT (do not reply to this directly — continue your task):\n" +
@@ -669,31 +721,31 @@ result_json
 
         if (role == "user")
         {
-            prefix = "you";
+            prefix = "🧔🏻‍♂️:";
             prefixColor = UserRoleColor;
             isDim = false;
         }
         else if (role == "ai" || role == "assistant")
         {
-            prefix = "ai";
+            prefix = "🤖:";
             prefixColor = AiRoleColor;
             isDim = false;
         }
         else if (role == "system")
         {
-            prefix = "sys";
+            prefix = "💻:";
             prefixColor = SysRoleColor;
             isDim = true;
         }
         else if (role == "error")
         {
-            prefix = "err";
+            prefix = "❌:";
             prefixColor = ErrRoleColor;
             isDim = false;
         }
         else if (role == "tool")
         {
-            prefix = "tool";
+            prefix = "🔧:";
             prefixColor = ToolRoleColor;
             isDim = true;
         }
@@ -745,6 +797,15 @@ result_json
         int b = (int)(c.B * 255);
         return "#" + r.ToString("X2") + g.ToString("X2") + b.ToString("X2");
     }
+
+    // Truncate a string for display — keeps the chat readable.
+    // Full data is always preserved in GD.Print() for debugging.
+    private static string Truncate(string s, int maxLen)
+    {
+        if (s.Length <= maxLen) return s;
+        return s.Substring(0, maxLen) + $"… (+{s.Length - maxLen} chars)";
+    }
+
 
     // =======================================================================
     // STATE MANAGEMENT
