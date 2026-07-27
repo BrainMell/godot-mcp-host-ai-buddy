@@ -1,5 +1,6 @@
 #if TOOLS
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using System.IO;
 using Microsoft.Playwright;
@@ -25,6 +26,10 @@ public class ChatService : IDisposable
     private IPlaywright _playwright = null!;  // set in InitializePlaywrightAsync
     private IBrowserContext _context = null!; // set in InitializePlaywrightAsync
     private IPage _page = null!;              // set in InitializePlaywrightAsync
+
+    // CancellationTokenSource — cancelled on Dispose so all in-flight awaits
+    // unblock immediately. This is what actually lets Godot unload the assembly.
+    private CancellationTokenSource _cts = new CancellationTokenSource();
 
     // The folder on disk where the browser saves cookies and login state.
     // Because this is a persistent context, the user only logs in once.
@@ -205,14 +210,22 @@ public class ChatService : IDisposable
 
         // Poll until the response text stabilizes (Gemini streams its output).
         // Hard timeout of 90 seconds to prevent hanging forever.
+        // Also respects _cts so Dispose() unblocks this loop immediately.
         string containerText = "";
         string previousText  = "";
         int stabilityCounter = 0;
         var deadline = DateTime.UtcNow.AddSeconds(90);
 
-        while (DateTime.UtcNow < deadline)
+        while (DateTime.UtcNow < deadline && !_cts.Token.IsCancellationRequested)
         {
-            await Task.Delay(500);
+            try
+            {
+                await Task.Delay(500, _cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                break; // Dispose was called — exit immediately
+            }
 
             containerText = await latestResponseLocator.TextContentAsync() ?? "";
             containerText = containerText.Trim();
@@ -301,19 +314,32 @@ public class ChatService : IDisposable
 
     public void Dispose()
     {
+        // Step 1: Signal cancellation FIRST so all active polling loops wake up
+        // and exit their await Task.Delay(..., _cts.Token) immediately.
+        // This is what frees the thread-pool threads Godot needs to unload assemblies.
+        try { _cts.Cancel(); } catch { }
+
+        // Step 2: Close the browser context (graceful shutdown, 5s budget).
+        // We use Task.Run so we're not blocking on async in a sync context.
         try
         {
-            _context?.CloseAsync().GetAwaiter().GetResult();
+            Task.Run(async () =>
+            {
+                try { if (_context != null) await _context.CloseAsync(); } catch { }
+            }).Wait(5000);
         }
-        catch {}
-        finally
-        {
-            _playwright?.Dispose();
-            _playwright = null!;
-            _context = null!;
-            _page = null!;
-            _stateOfBrowser = null;
-        }
+        catch { }
+
+        // Step 3: Dispose Playwright (kills the underlying node subprocess).
+        try { _playwright?.Dispose(); } catch { }
+
+        // Step 4: Dispose the CancellationTokenSource itself.
+        try { _cts.Dispose(); } catch { }
+
+        _playwright = null!;
+        _context    = null!;
+        _page       = null!;
+        _stateOfBrowser = null;
     }
 }
 #endif
