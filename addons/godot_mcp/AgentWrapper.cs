@@ -203,12 +203,14 @@ public class ChatService : IDisposable
         var latestResponseLocator = _page.Locator(".container").Nth(responseCount);
         await latestResponseLocator.WaitForAsync(new() { State = WaitForSelectorState.Attached });
 
-        // Poll until the response text stabilizes (Gemini streams its output)
+        // Poll until the response text stabilizes (Gemini streams its output).
+        // Hard timeout of 90 seconds to prevent hanging forever.
         string containerText = "";
         string previousText  = "";
         int stabilityCounter = 0;
+        var deadline = DateTime.UtcNow.AddSeconds(90);
 
-        while (true)
+        while (DateTime.UtcNow < deadline)
         {
             await Task.Delay(500);
 
@@ -225,6 +227,11 @@ public class ChatService : IDisposable
                 previousText     = containerText;
                 stabilityCounter = 0; // still changing — keep waiting
             }
+        }
+
+        if (string.IsNullOrEmpty(containerText))
+        {
+            return "Error: Gemini did not respond within 90 seconds. Please try again.";
         }
 
         return containerText;

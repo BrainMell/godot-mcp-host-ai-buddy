@@ -38,6 +38,7 @@ public partial class ChatDock : Control
     private Label _status = null!;
     private Label _statusDot = null!;
     private Button _clearBtn = null!;
+    private Button _copyBtn  = null!;
 
     // -- State -------------------------------------------------------------
     // ? means this can be null (it's null if the API key wasn't found)
@@ -316,6 +317,21 @@ result_json
         _clearBtn.AddThemeColorOverride("font_hover_color", FgColor);
         _clearBtn.Pressed += ClearChat;
         headerInner.AddChild(_clearBtn);
+
+        // Copy button
+        _copyBtn = new Button
+        {
+            Text = "copy",
+            Flat = true,
+            CustomMinimumSize = new Vector2(0, 22),
+            MouseFilter = MouseFilterEnum.Stop,
+        };
+        ApplyMonospaceFont(_copyBtn);
+        _copyBtn.AddThemeFontSizeOverride("font_size", 11);
+        _copyBtn.AddThemeColorOverride("font_color", FgDimColor);
+        _copyBtn.AddThemeColorOverride("font_hover_color", FgColor);
+        _copyBtn.Pressed += CopyChat;
+        headerInner.AddChild(_copyBtn);
 
         // -- SEPARATOR (thin line below header) -----------------------------
         root.AddChild(MakeSeparator());
@@ -689,6 +705,15 @@ result_json
     {
         _output.Clear();
         AppendMessage("system", "chat cleared.");
+    }
+
+    // Copy the full chat log as plain text to the clipboard
+    private void CopyChat()
+    {
+        // _output.Text strips BBCode and gives us clean plain text
+        string plainText = _output.GetParsedText();
+        DisplayServer.ClipboardSet(plainText);
+        AppendMessage("system", "chat copied to clipboard.");
     }
 
     // =======================================================================
