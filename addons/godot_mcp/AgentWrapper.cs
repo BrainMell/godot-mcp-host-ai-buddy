@@ -255,9 +255,8 @@ public class ChatService
         bool isBrandNew = Directory.GetFileSystemEntries(fullPath).Length == 0;
 
         // Determine headless mode dynamically:
-        // - If brand new profile, we MUST run headed (headless = false) so the user can sign in.
-        // - If not brand new, we run headless (headless = true) to keep the browser invisible.
-        bool runHeadless = !isBrandNew;
+        // Temporarily forced to false (headed mode) for debugging
+        bool runHeadless = false;
 
         // Launch (or reuse) the browser
         await InitializePlaywrightAsync(runHeadless);
