@@ -1,11 +1,12 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
-
+.agents/
 # Dotnet / C# ignores
 bin/
 obj/
 *.user
+docs/
 
 # Environment secrets
 .env
