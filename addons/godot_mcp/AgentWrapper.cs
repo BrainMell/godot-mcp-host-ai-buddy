@@ -347,14 +347,23 @@ public class ChatService : IDisposable
             string text = await el.InnerTextAsync();
             text = text.Trim();
             if (string.IsNullOrEmpty(text)) continue;
+            
+            // Ignore UI artifact labels that some platforms (like Gemini) inject next to messages
+            if (text.Equals("You said", StringComparison.OrdinalIgnoreCase) || 
+                text.Equals("Gemini said", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("ChatGPT said", StringComparison.OrdinalIgnoreCase)) 
+                continue;
+
+            // Escape newlines so the entire element's text fits on one line in the serialized format
+            string singleLineText = text.Replace("\r", "").Replace("\n", "\\n");
 
             if (className.Contains("query-") || tagName.Contains("QUERY"))
             {
-                sb.AppendLine($"[ROLE:USER]{text}");
+                sb.AppendLine($"[ROLE:USER]{singleLineText}");
             }
             else
             {
-                sb.AppendLine($"[ROLE:AI]{text}");
+                sb.AppendLine($"[ROLE:AI]{singleLineText}");
             }
         }
         return sb.ToString().Trim();

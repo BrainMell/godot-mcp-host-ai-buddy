@@ -1267,7 +1267,7 @@ result_json
             {
                 if (line.StartsWith("[ROLE:USER]"))
                 {
-                    string userText = line.Substring("[ROLE:USER]".Length).Trim();
+                    string userText = line.Substring("[ROLE:USER]".Length).Replace("\\n", "\n").Trim();
                     // Is it JSON (tool response)?
                     if (IsJsonString(userText))
                     {
@@ -1280,7 +1280,7 @@ result_json
                 }
                 else if (line.StartsWith("[ROLE:AI]"))
                 {
-                    string aiText = line.Substring("[ROLE:AI]".Length).Trim();
+                    string aiText = line.Substring("[ROLE:AI]".Length).Replace("\\n", "\n").Trim();
                     // Is it JSON (tool call)?
                     if (IsJsonString(aiText))
                     {
@@ -1307,7 +1307,19 @@ result_json
     private bool IsJsonString(string text)
     {
         text = text.Trim();
-        return (text.StartsWith("{") && text.EndsWith("}")) || (text.StartsWith("[") && text.EndsWith("]"));
+        if ((text.StartsWith("{") && text.EndsWith("}")) || (text.StartsWith("[") && text.EndsWith("]")))
+        {
+            try
+            {
+                System.Text.Json.JsonDocument.Parse(text);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        return false;
     }
 
     private async Task RenameActiveSessionAsync(string newName)
