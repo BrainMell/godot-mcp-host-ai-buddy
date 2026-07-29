@@ -4,6 +4,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.IO;
 using Microsoft.Playwright;
+using System.Runtime.Loader;
+using System.Collections.Generic;
+using Godot;
 
 namespace GodotMCP;
 
@@ -22,6 +25,46 @@ namespace GodotMCP;
 // ---------------------------------------------------------------------------
 public class ChatService : IDisposable
 {
+    private static readonly List<ChatService> _activeInstances = new List<ChatService>();
+
+    public ChatService()
+    {
+        lock (_activeInstances)
+        {
+            _activeInstances.Add(this);
+            if (_activeInstances.Count == 1)
+            {
+                var alc = AssemblyLoadContext.GetLoadContext(typeof(ChatService).Assembly);
+                if (alc != null)
+                {
+                    alc.Unloading += OnAssemblyUnloading;
+                }
+            }
+        }
+    }
+
+    private static void OnAssemblyUnloading(AssemblyLoadContext context)
+    {
+        GD.Print("[GodotMCP] Assembly unloading. Disposing active Playwright browser sessions...");
+        List<ChatService> toDispose;
+        lock (_activeInstances)
+        {
+            toDispose = new List<ChatService>(_activeInstances);
+            _activeInstances.Clear();
+        }
+        foreach (var instance in toDispose)
+        {
+            try
+            {
+                instance.Dispose();
+            }
+            catch (Exception ex)
+            {
+                GD.PrintErr("[GodotMCP] Error during ChatService assembly unloading cleanup: " + ex.Message);
+            }
+        }
+    }
+
     // -- Playwright state (one browser shared across all AI sessions) --------
     private IPlaywright _playwright = null!;  // set in InitializePlaywrightAsync
     private IBrowserContext _context = null!; // set in InitializePlaywrightAsync
@@ -546,6 +589,11 @@ public class ChatService : IDisposable
 
         // Step 4: Dispose the CancellationTokenSource itself.
         try { _cts.Dispose(); } catch { }
+
+        lock (_activeInstances)
+        {
+            _activeInstances.Remove(this);
+        }
 
         _playwright = null!;
         _context    = null!;
