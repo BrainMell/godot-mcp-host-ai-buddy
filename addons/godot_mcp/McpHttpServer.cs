@@ -131,7 +131,11 @@ public partial class McpHttpServer : Node
         {
             _activeServers.Remove(this);
         }
-        _tcpServer?.Stop();
+        if (_tcpServer != null)
+        {
+            _tcpServer.Stop();
+            _tcpServer = null;
+        }
         if (_client != null)
         {
             _client.DisconnectFromHost();

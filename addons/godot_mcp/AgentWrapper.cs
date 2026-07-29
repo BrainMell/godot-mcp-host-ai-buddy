@@ -641,26 +641,13 @@ public class ChatService : IDisposable
 
     public void Dispose()
     {
-        // Step 1: Signal cancellation FIRST so all active polling loops wake up
-        // and exit their await Task.Delay(..., _cts.Token) immediately.
-        // This is what frees the thread-pool threads Godot needs to unload assemblies.
+        // Step 1: Signal cancellation FIRST so all active loops wake up
         try { _cts.Cancel(); } catch { }
 
-        // Step 2: Close the browser context (graceful shutdown, 5s budget).
-        // We use Task.Run so we're not blocking on async in a sync context.
-        try
-        {
-            Task.Run(async () =>
-            {
-                try { if (_context != null) await _context.CloseAsync(); } catch { }
-            }).Wait(5000);
-        }
-        catch { }
-
-        // Step 3: Dispose Playwright (kills the underlying node subprocess).
+        // Step 2: Dispose Playwright (instantly terminates connection and kills node/browser subprocesses)
         try { _playwright?.Dispose(); } catch { }
 
-        // Step 4: Dispose the CancellationTokenSource itself.
+        // Step 3: Dispose the CancellationTokenSource itself
         try { _cts.Dispose(); } catch { }
 
         lock (_activeInstances)
