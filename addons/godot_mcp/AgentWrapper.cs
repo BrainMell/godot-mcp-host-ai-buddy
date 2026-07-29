@@ -518,7 +518,7 @@ public class ChatService : IDisposable
 
         // Explicitly wait for some initial text to start streaming to avoid premature empty reads
         string containerText = "";
-        var startDeadline = DateTime.UtcNow.AddSeconds(5);
+        var startDeadline = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < startDeadline && !_cts.Token.IsCancellationRequested)
         {
             containerText = await latestResponseLocator.TextContentAsync() ?? "";
@@ -537,11 +537,11 @@ public class ChatService : IDisposable
         }
 
         // Poll until the response text stabilizes (Gemini streams its output).
-        // Hard timeout of 90 seconds to prevent hanging forever.
+        // Hard timeout of 240 seconds to prevent hanging forever.
         // Also respects _cts so Dispose() unblocks this loop immediately.
         string previousText  = "";
         int stabilityCounter = 0;
-        var deadline = DateTime.UtcNow.AddSeconds(90);
+        var deadline = DateTime.UtcNow.AddSeconds(240);
 
         while (DateTime.UtcNow < deadline && !_cts.Token.IsCancellationRequested)
         {
