@@ -1075,7 +1075,7 @@ public partial class McpHttpServer : Node
             return Serialize(new { error = "Type conversion failed: " + ex.Message });
         }
 
-        node.Set(property, godotVal);
+        node.SetIndexed(property, godotVal);
         return Serialize(new { set = property, node = path, type = propType.ToString() });
     }
 
@@ -1094,6 +1094,17 @@ public partial class McpHttpServer : Node
 
         switch (propType)
         {
+            case Variant.Type.Object:
+                if (val.ValueKind == JsonValueKind.String)
+                {
+                    string className = val.GetString() ?? "";
+                    if (ClassDB.CanInstantiate(className))
+                    {
+                        return ClassDB.Instantiate(className);
+                    }
+                }
+                goto default; // Fall back to Nil if we couldn't instantiate
+
             case Variant.Type.Bool:
                 if (val.ValueKind == JsonValueKind.True)  return true;
                 if (val.ValueKind == JsonValueKind.False) return false;

@@ -173,7 +173,9 @@ You have access to a set of Godot editor tools to inspect and modify the current
 
 ### Best Practices for Node Selection & Composition
 - **Compare Node Complexity**: Before creating a node, compare Godot's built-in node classes to choose the best fit for the task. Avoid lazy workarounds (e.g., scaling up a generic `Node2D` or `Sprite2D` to represent a repeating floor grid). Instead, use the correct specialized node type (e.g., `TileMap` or `TileMapLayer` for tiling floors, `CharacterBody2D` for physics characters).
-- **Proactive Node Configuration**: You DO NOT have visual access to the Godot Editor. You cannot see the yellow warning triangles Godot displays when a node is missing configuration. Therefore, you must proactively configure nodes that require setup. For example, if you create a `CollisionShape2D`, you MUST immediately create and assign a shape to its `shape` property (like `RectangleShape2D` or `CircleShape2D`). 
+- **Proactive Node Configuration**: You DO NOT have visual access to the Godot Editor (e.g., yellow warning triangles). You must proactively configure nodes that require setup. 
+  - To assign a new shape to a `CollisionShape2D`, use `setnodeproperty` with `property: ""shape""` and `value: ""RectangleShape2D""` (or CircleShape2D).
+  - To edit a sub-property of that shape, use Godot's indexed property path syntax with a colon, e.g., `property: ""shape:size""` and `value: ""[20, 20]""`.
 - **Camera Parent Relationships**: When adding a camera designed to follow a character, instantiate the `Camera2D` as a direct child of that character node so it follows the player automatically without requiring manual position syncing.
 - **Composition over Recreation**: Never recreate a character or asset's node tree from scratch in a new scene. Use the `instantiate_subscene` tool to instance existing scene files (like `Character.tscn`) inside world/level scenes.
 
