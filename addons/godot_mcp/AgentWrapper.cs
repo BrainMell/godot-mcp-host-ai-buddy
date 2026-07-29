@@ -518,9 +518,29 @@ public class ChatService : IDisposable
 
         // Explicitly wait for some initial text to start streaming to avoid premature empty reads
         string containerText = "";
-        var startDeadline = DateTime.UtcNow.AddSeconds(30);
+        var startDeadline = DateTime.UtcNow.AddSeconds(240); // Allow up to 4 minutes for deep thinking
         while (DateTime.UtcNow < startDeadline && !_cts.Token.IsCancellationRequested)
         {
+            // Check for browser network connectivity and active connection
+            try
+            {
+                if (_page.IsClosed || (_page.Context.Browser != null && !_page.Context.Browser.IsConnected))
+                {
+                    throw new Exception("Browser connection was closed.");
+                }
+                
+                bool isOnline = await _page.EvaluateAsync<bool>("() => navigator.onLine");
+                if (!isOnline)
+                {
+                    throw new Exception("Network is offline.");
+                }
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                // Abort immediately on network or browser crash
+                throw new Exception("Connection error while waiting for response: " + ex.Message);
+            }
+
             containerText = await latestResponseLocator.TextContentAsync() ?? "";
             if (!string.IsNullOrEmpty(containerText.Trim()))
             {
@@ -528,7 +548,7 @@ public class ChatService : IDisposable
             }
             try
             {
-                await Task.Delay(200, _cts.Token);
+                await Task.Delay(500, _cts.Token); // Check twice per second
             }
             catch (OperationCanceledException)
             {
