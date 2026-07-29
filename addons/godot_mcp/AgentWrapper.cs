@@ -162,14 +162,34 @@ public class ChatService : IDisposable
             await _page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
         }
 
-        // Wait a moment for dynamic sidebar elements to load
+        // Ensure the sidebar is opened
         try
         {
-            await _page.Locator("div[class*='chat-history-item']").First.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5000 });
+            await _page.Locator("[data-test-id=\"all-conversations\"]").WaitForAsync(new() 
+            { 
+                State = WaitForSelectorState.Visible, 
+                Timeout = 3000 
+            });
         }
-        catch { /* ignored if no items yet */ }
+        catch (TimeoutException)
+        {
+            var menuBtn = _page.Locator("[data-test-id=\"side-nav-menu-button\"]");
+            if (await menuBtn.CountAsync() > 0 && await menuBtn.IsVisibleAsync())
+            {
+                await menuBtn.ClickAsync();
+                try
+                {
+                    await _page.Locator("[data-test-id=\"all-conversations\"]").WaitForAsync(new() 
+                    { 
+                        State = WaitForSelectorState.Visible, 
+                        Timeout = 3000 
+                    });
+                }
+                catch { }
+            }
+        }
 
-        var chatLogs = await _page.Locator("div[class*='chat-history-item']").AllAsync();
+        var chatLogs = await _page.Locator("[data-test-id='all-conversations'] a").AllAsync();
         if (chatLogs.Count == 0)
         {
             return "No recent chat sessions found.";
@@ -221,13 +241,34 @@ public class ChatService : IDisposable
             await _page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
         }
 
+        // Ensure the sidebar is opened
         try
         {
-            await _page.Locator("div[class*='chat-history-item']").First.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5000 });
+            await _page.Locator("[data-test-id=\"all-conversations\"]").WaitForAsync(new() 
+            { 
+                State = WaitForSelectorState.Visible, 
+                Timeout = 3000 
+            });
         }
-        catch { /* ignored */ }
+        catch (TimeoutException)
+        {
+            var menuBtn = _page.Locator("[data-test-id=\"side-nav-menu-button\"]");
+            if (await menuBtn.CountAsync() > 0 && await menuBtn.IsVisibleAsync())
+            {
+                await menuBtn.ClickAsync();
+                try
+                {
+                    await _page.Locator("[data-test-id=\"all-conversations\"]").WaitForAsync(new() 
+                    { 
+                        State = WaitForSelectorState.Visible, 
+                        Timeout = 3000 
+                    });
+                }
+                catch { }
+            }
+        }
 
-        var chatLogs = await _page.Locator("div[class*='chat-history-item']").AllAsync();
+        var chatLogs = await _page.Locator("[data-test-id='all-conversations'] a").AllAsync();
         if (chatLogs.Count == 0)
         {
             return "Error: No chat sessions found to navigate.";
