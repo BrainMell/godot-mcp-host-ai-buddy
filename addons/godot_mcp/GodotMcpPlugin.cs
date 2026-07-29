@@ -59,6 +59,28 @@ public partial class GodotMcpPlugin : EditorPlugin
     }
 
     // -----------------------------------------------------------------------
+    // _Build — called by the engine just before C# rebuilds / unloads
+    // -----------------------------------------------------------------------
+
+    public override bool _Build()
+    {
+        // 1. Force the agent to dispose before the build starts
+        if (_dock != null)
+        {
+            _dock.ForceDisposeAgent();
+        }
+
+        // 2. Stop the HTTP server to free up the socket
+        if (_server != null)
+        {
+            _server.Stop();
+        }
+
+        GD.Print("[GodotMCP] Prepared for build/hot-reload by stopping background processes.");
+        return true;
+    }
+
+    // -----------------------------------------------------------------------
     // _ExitTree — called when the user disables the plugin
     // -----------------------------------------------------------------------
 

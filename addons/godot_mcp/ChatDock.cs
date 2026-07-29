@@ -151,6 +151,15 @@ public partial class ChatDock : Control
         }
     }
 
+    public void ForceDisposeAgent()
+    {
+        if (_agent != null)
+        {
+            _agent.Dispose();
+            _agent = null;
+        }
+    }
+
     // -----------------------------------------------------------------------
     // GetSystemPrompt — builds the system instructions including tool schemas
     // -----------------------------------------------------------------------
