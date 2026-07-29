@@ -111,6 +111,8 @@ public partial class ChatDock : Control
 
     public override void _ExitTree()
     {
+        ForceDisposeAgent();
+
         if (_clearBtn != null && _clearBtn.IsConnected("pressed", new Callable(this, nameof(ClearChat))))
             _clearBtn.Disconnect("pressed", new Callable(this, nameof(ClearChat)));
         if (_copyBtn != null && _copyBtn.IsConnected("pressed", new Callable(this, nameof(CopyChat))))
@@ -188,9 +190,11 @@ You must dynamically choose between two distinct modes of operation depending on
 
 2. **ACTION MODE**:
    - **Trigger**: The user requests an action inside the editor (e.g., ""create a node"", ""delete the Player"", ""save the scene"", ""list files"").
-   - **Behavior**: Your response **MUST contain ONLY the [CALL] block and absolutely nothing else**. No introduction, no explanation, no filler text before or after it.
+   - **Behavior**: 
+     - **Thinking/Planning Step**: Before outputting the `[CALL]` block, you may output a brief, ultra-specific thinking/planning paragraph outlining each action you intend to take. Review the steps to ensure they fully reach the desired goal and user intention (e.g., ensuring a collision shape is properly sized, or check node class inheritance). You can decide whether to include this planning step based on the complexity of the task (highly recommended for multi-step setups like creating functional enemies).
+     - **Tool Call Step**: Immediately after the plan, output your single `[CALL]` block.
 
-   STRICT RULE: When you are in Action Mode, your ENTIRE response must be exactly one [CALL] block. No introduction. No explanation. No text before or after the tags. Writing any text outside [CALL]...[/CALL] while in Action Mode is an error.
+   STRICT RULE: In Action Mode, you may write a brief planning/thinking message *before* the `[CALL]` block, but you must NOT write any text *after* the `[/CALL]` block. Writing any text outside of the optional prefix plan and the `[CALL]` tags is an error.
 
    WRONG (never do this):
      Sure! I'll create that node for you.

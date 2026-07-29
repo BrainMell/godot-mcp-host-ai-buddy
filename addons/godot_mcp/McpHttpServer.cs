@@ -1358,6 +1358,8 @@ public partial class McpHttpServer : Node
 
         PackedScene packedScene = new PackedScene();
         Error err = packedScene.Pack(root);
+        root.Free(); // Free the instantiated temporary node so it does not leak memory
+
         if (err != Error.Ok)
         {
             return Serialize(new { error = "Failed to pack scene: " + err });
