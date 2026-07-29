@@ -39,8 +39,14 @@ public partial class ChatDock : Control
     private Label _statusDot = null!;
     private Button _clearBtn = null!;
     private Button _copyBtn  = null!;
+    private Button _sessionsBtn = null!;
+    private Button _prevSessionBtn = null!;
+    private Button _nextSessionBtn = null!;
+    private Label _sessionIndexLbl = null!;
 
     // -- State -------------------------------------------------------------
+    private int _currentSessionIndex = -1;
+    private int _totalSessionsCount = 0;
     // ? means this can be null (it's null if the API key wasn't found)
     private ChatService? _agent;
     private GodotTools _tools = null!;
@@ -112,6 +118,12 @@ public partial class ChatDock : Control
             _input.Disconnect("text_submitted", new Callable(this, MethodName.OnSend));
         if (_sendBtn != null && _sendBtn.IsConnected("pressed", new Callable(this, MethodName.OnSendButtonPressed)))
             _sendBtn.Disconnect("pressed", new Callable(this, MethodName.OnSendButtonPressed));
+        if (_sessionsBtn != null && _sessionsBtn.IsConnected("pressed", new Callable(this, MethodName.OnSessionsHistoryPressed)))
+            _sessionsBtn.Disconnect("pressed", new Callable(this, MethodName.OnSessionsHistoryPressed));
+        if (_prevSessionBtn != null && _prevSessionBtn.IsConnected("pressed", new Callable(this, MethodName.OnPrevSessionPressed)))
+            _prevSessionBtn.Disconnect("pressed", new Callable(this, MethodName.OnPrevSessionPressed));
+        if (_nextSessionBtn != null && _nextSessionBtn.IsConnected("pressed", new Callable(this, MethodName.OnNextSessionPressed)))
+            _nextSessionBtn.Disconnect("pressed", new Callable(this, MethodName.OnNextSessionPressed));
     }
 
     // -----------------------------------------------------------------------
@@ -122,7 +134,7 @@ public partial class ChatDock : Control
     {
         try
         {
-            // ChatService doesn't need an API key or tools — the browser does the work
+            // ChatService initiates the method ChatService which opens up gemini
             _agent = new ChatService();
             _tools = new GodotTools();
             SetStatus("ready", StatusOkColor);
@@ -380,7 +392,70 @@ result_json
         _status.VerticalAlignment = VerticalAlignment.Center;
         headerInner.AddChild(_status);
 
-        // Small spacer before the clear button
+        // Spacer before sessions UI
+        Control headerSpacer1 = new Control { CustomMinimumSize = new Vector2(8, 0) };
+        headerInner.AddChild(headerSpacer1);
+
+        // Sessions history button
+        _sessionsBtn = new Button
+        {
+            Text = "history",
+            Flat = true,
+            CustomMinimumSize = new Vector2(0, 22),
+            MouseFilter = MouseFilterEnum.Stop,
+        };
+        ApplyMonospaceFont(_sessionsBtn);
+        _sessionsBtn.AddThemeFontSizeOverride("font_size", 11);
+        _sessionsBtn.AddThemeColorOverride("font_color", FgDimColor);
+        _sessionsBtn.AddThemeColorOverride("font_hover_color", AccentColor);
+        _sessionsBtn.Connect("pressed", new Callable(this, MethodName.OnSessionsHistoryPressed));
+        headerInner.AddChild(_sessionsBtn);
+
+        // Prev Session button
+        _prevSessionBtn = new Button
+        {
+            Text = "<",
+            Flat = true,
+            CustomMinimumSize = new Vector2(15, 22),
+            MouseFilter = MouseFilterEnum.Stop,
+            Disabled = true
+        };
+        ApplyMonospaceFont(_prevSessionBtn);
+        _prevSessionBtn.AddThemeFontSizeOverride("font_size", 11);
+        _prevSessionBtn.AddThemeColorOverride("font_color", FgDimColor);
+        _prevSessionBtn.AddThemeColorOverride("font_hover_color", AccentColor);
+        _prevSessionBtn.Connect("pressed", new Callable(this, MethodName.OnPrevSessionPressed));
+        headerInner.AddChild(_prevSessionBtn);
+
+        // Session Index Label
+        _sessionIndexLbl = new Label
+        {
+            Text = "[-]",
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        ApplyMonospaceFont(_sessionIndexLbl);
+        _sessionIndexLbl.AddThemeColorOverride("font_color", FgDimColor);
+        _sessionIndexLbl.AddThemeFontSizeOverride("font_size", 11);
+        _sessionIndexLbl.VerticalAlignment = VerticalAlignment.Center;
+        headerInner.AddChild(_sessionIndexLbl);
+
+        // Next Session button
+        _nextSessionBtn = new Button
+        {
+            Text = ">",
+            Flat = true,
+            CustomMinimumSize = new Vector2(15, 22),
+            MouseFilter = MouseFilterEnum.Stop,
+            Disabled = true
+        };
+        ApplyMonospaceFont(_nextSessionBtn);
+        _nextSessionBtn.AddThemeFontSizeOverride("font_size", 11);
+        _nextSessionBtn.AddThemeColorOverride("font_color", FgDimColor);
+        _nextSessionBtn.AddThemeColorOverride("font_hover_color", AccentColor);
+        _nextSessionBtn.Connect("pressed", new Callable(this, MethodName.OnNextSessionPressed));
+        headerInner.AddChild(_nextSessionBtn);
+
+        // Spacer before clear button
         Control headerSpacer = new Control { CustomMinimumSize = new Vector2(16, 0) };
         headerInner.AddChild(headerSpacer);
 
@@ -568,6 +643,27 @@ result_json
         {
             // Handle slash commands
             string command = text.Substring(1).Trim().ToLower();
+            if (command == "sessions" || command == "history")
+            {
+                _input.Clear();
+                await ShowChatSessionsAsync();
+                return;
+            }
+            if (command.StartsWith("session ") || command.StartsWith("select "))
+            {
+                _input.Clear();
+                string idxStr = command.Substring(command.IndexOf(" ")).Trim();
+                if (int.TryParse(idxStr, out int idx))
+                {
+                    await NavigateToSessionAsync(idx);
+                }
+                else
+                {
+                    AppendMessage("error", "Invalid session index. Usage: /session <index>");
+                }
+                return;
+            }
+
             switch(command)
             {
                 case "clear":
@@ -602,6 +698,8 @@ result_json
                     return;
                 case "help":
                     AppendMessage("system", "Available commands:\n" +
+                        "/sessions - List past chat sessions\n" +
+                        "/session <index> - Switch to a past chat session by index\n" +
                         "/clear - Clear the chat output\n" +
                         "/copy - Copy the chat log to clipboard\n" +
                         "/model <model_name> - Switch between available models (gemini, Chatgpt, Zai)\n" +
@@ -954,6 +1052,127 @@ result_json
         string plainText = _output.GetParsedText();
         DisplayServer.ClipboardSet(plainText);
         AppendMessage("system", "chat copied to clipboard.");
+    }
+
+    // =======================================================================
+    // CHAT SESSIONS HISTORY & NAVIGATION
+    // =======================================================================
+
+    private async void OnSessionsHistoryPressed()
+    {
+        await ShowChatSessionsAsync();
+    }
+
+    private async void OnPrevSessionPressed()
+    {
+        if (_currentSessionIndex > 0)
+        {
+            _currentSessionIndex--;
+            await NavigateToSessionAsync(_currentSessionIndex);
+        }
+    }
+
+    private async void OnNextSessionPressed()
+    {
+        if (_currentSessionIndex < _totalSessionsCount - 1)
+        {
+            _currentSessionIndex++;
+            await NavigateToSessionAsync(_currentSessionIndex);
+        }
+    }
+
+    private async Task ShowChatSessionsAsync()
+    {
+        if (_agent == null)
+        {
+            AppendMessage("error", "agent not initialized.");
+            return;
+        }
+
+        AppendMessage("system", "Fetching recent chat sessions from " + _currentModel + "...");
+        SetWaiting(true);
+
+        try
+        {
+            string result = await _agent.CheckChatHistoryAsync(_currentModel);
+            AppendMessage("system", result);
+
+            // Parse session count from the output text block
+            int count = 0;
+            string[] lines = result.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string line in lines)
+            {
+                if (line.Trim().StartsWith("["))
+                {
+                    count++;
+                }
+            }
+
+            _totalSessionsCount = count;
+            if (count > 0 && _currentSessionIndex == -1)
+            {
+                _currentSessionIndex = 0;
+            }
+            UpdateSessionUi();
+        }
+        catch (Exception ex)
+        {
+            AppendMessage("error", "Failed to fetch chat history: " + ex.Message);
+        }
+        finally
+        {
+            SetWaiting(false);
+        }
+    }
+
+    private async Task NavigateToSessionAsync(int index)
+    {
+        if (_agent == null)
+        {
+            AppendMessage("error", "agent not initialized.");
+            return;
+        }
+
+        AppendMessage("system", $"Navigating to session [{index}]...");
+        SetWaiting(true);
+
+        try
+        {
+            string result = await _agent.GetChatHistoryCountAsync(_currentModel, index);
+            AppendMessage("system", result);
+
+            if (!result.StartsWith("Error"))
+            {
+                _currentSessionIndex = index;
+                _sessionActive = true;
+                _sessionPrimed = true; // Subscene/history context is already established
+            }
+            UpdateSessionUi();
+        }
+        catch (Exception ex)
+        {
+            AppendMessage("error", "Failed to navigate session: " + ex.Message);
+        }
+        finally
+        {
+            SetWaiting(false);
+        }
+    }
+
+    private void UpdateSessionUi()
+    {
+        if (_currentSessionIndex == -1 || _totalSessionsCount == 0)
+        {
+            _sessionIndexLbl.Text = "[-]";
+            _prevSessionBtn.Disabled = true;
+            _nextSessionBtn.Disabled = true;
+        }
+        else
+        {
+            _sessionIndexLbl.Text = $"[{_currentSessionIndex}/{_totalSessionsCount - 1}]";
+            _prevSessionBtn.Disabled = (_currentSessionIndex <= 0);
+            _nextSessionBtn.Disabled = (_currentSessionIndex >= _totalSessionsCount - 1);
+        }
     }
 
     // =======================================================================

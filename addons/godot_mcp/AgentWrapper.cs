@@ -130,6 +130,127 @@ public class ChatService : IDisposable
 
         return "Authenticated";
     }
+    public async Task<string> CheckChatHistoryAsync(string model)
+    {
+        string url = "";
+        switch (model.ToLower())
+        {
+            case "chatgpt": url = _ChatGPT; break;
+            case "gemini":  url = _Gemini; break;
+            case "zai":     url = _Zai; break;
+            default:        url = _Gemini; break;
+        }
+
+        string fullPath = Path.GetFullPath(_profilePath);
+        if (!Directory.Exists(fullPath))
+        {
+            Directory.CreateDirectory(fullPath);
+        }
+        bool isBrandNew = Directory.GetFileSystemEntries(fullPath).Length == 0;
+        bool runHeadless = !isBrandNew;
+        await InitializePlaywrightAsync(runHeadless);
+
+        string loginStatus = await CheckIfLoggedInAsync(isBrandNew);
+        if (loginStatus.StartsWith("LoginRequired"))
+        {
+            return loginStatus;
+        }
+
+        if (!_page.Url.StartsWith(url))
+        {
+            await _page.GotoAsync(url);
+            await _page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+        }
+
+        // Wait a moment for dynamic sidebar elements to load
+        try
+        {
+            await _page.Locator("div[class*='chat-history-item']").First.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5000 });
+        }
+        catch { /* ignored if no items yet */ }
+
+        var chatLogs = await _page.Locator("div[class*='chat-history-item']").AllAsync();
+        if (chatLogs.Count == 0)
+        {
+            return "No recent chat sessions found.";
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Recent Chat Sessions:");
+        for (int i = 0; i < chatLogs.Count; i++)
+        {
+            var log = chatLogs[i];
+            var logText = await log.InnerTextAsync();
+            logText = logText.Replace("\r", "").Replace("\n", " ").Trim();
+            sb.AppendLine($"[{i}] {logText}");
+        }
+
+        return sb.ToString().Trim();
+    }       
+
+    // Navigates to a specific chat session by index in the history sidebar
+    public async Task<string> GetChatHistoryCountAsync(string model, int sessionIndex)
+    {
+        string url = "";
+        switch (model.ToLower())
+        {
+            case "chatgpt": url = _ChatGPT; break;
+            case "gemini":  url = _Gemini; break;
+            case "zai":     url = _Zai; break;
+            default:        url = _Gemini; break;
+        }
+
+        string fullPath = Path.GetFullPath(_profilePath);
+        if (!Directory.Exists(fullPath))
+        {
+            Directory.CreateDirectory(fullPath);
+        }
+        bool isBrandNew = Directory.GetFileSystemEntries(fullPath).Length == 0;
+        bool runHeadless = !isBrandNew;
+        await InitializePlaywrightAsync(runHeadless);
+
+        string loginStatus = await CheckIfLoggedInAsync(isBrandNew);
+        if (loginStatus.StartsWith("LoginRequired"))
+        {
+            return loginStatus;
+        }
+
+        if (!_page.Url.StartsWith(url))
+        {
+            await _page.GotoAsync(url);
+            await _page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+        }
+
+        try
+        {
+            await _page.Locator("div[class*='chat-history-item']").First.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5000 });
+        }
+        catch { /* ignored */ }
+
+        var chatLogs = await _page.Locator("div[class*='chat-history-item']").AllAsync();
+        if (chatLogs.Count == 0)
+        {
+            return "Error: No chat sessions found to navigate.";
+        }
+
+        if (sessionIndex < 0 || sessionIndex >= chatLogs.Count)
+        {
+            return $"Error: Session index {sessionIndex} is out of bounds (0 to {chatLogs.Count - 1}).";
+        }
+
+        var targetLog = chatLogs[sessionIndex];
+        var sessionTitle = await targetLog.InnerTextAsync();
+        sessionTitle = sessionTitle.Replace("\r", "").Replace("\n", " ").Trim();
+
+        // Click the target chat session item in the sidebar
+        await targetLog.ClickAsync();
+
+        // Allow page time to load dynamic message contents for that chat
+        await _page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+        await Task.Delay(1000); 
+
+        return $"Switched to session [{sessionIndex}]: {sessionTitle}";
+    }
 
     // -----------------------------------------------------------------------
     // Private automation providers — each one handles a specific AI site.
