@@ -1240,22 +1240,11 @@ result_json
             // 2. Scrape the messages of this conversation first (before clearing the UI)
             string messagesStr = await _agent.GetChatHistoryMessagesAsync(_currentModel);
             
-            // 3. Find the first user prompt to inspect it
-            string firstUserPrompt = "";
-            string[] msgLines = messagesStr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (string line in msgLines)
-            {
-                if (line.StartsWith("[ROLE:USER]"))
-                {
-                    firstUserPrompt = line.Substring("[ROLE:USER]".Length);
-                    break;
-                }
-            }
-
-            // 4. Validate the system prompt signature
-            bool isValid = firstUserPrompt.Contains("Godot") || 
-                           firstUserPrompt.Contains("MCP") || 
-                           firstUserPrompt.Contains("tool");
+            // 3. Validate the system prompt signature anywhere in the scraped conversation
+            bool isValid = messagesStr.Contains("Godot Editor") || 
+                           messagesStr.Contains("GodotMCP") || 
+                           messagesStr.Contains("[CALL]") ||
+                           messagesStr.Contains("Respond only with: READY");
 
             if (!isValid)
             {
@@ -1271,6 +1260,7 @@ result_json
             _output.Clear();
 
             // 6. Replace UI output with the entire conversation history
+            string[] msgLines = messagesStr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
             foreach (string line in msgLines)
             {
                 if (line.StartsWith("[ROLE:USER]"))
