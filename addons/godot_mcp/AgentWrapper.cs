@@ -336,6 +336,79 @@ public class ChatService : IDisposable
         return $"Switched to session [{sessionIndex}]: {sessionTitle}";
     }
 
+    // Scrapes the visible messages (both user queries and model responses) of the currently active chat session
+    public async Task<string> GetChatHistoryMessagesAsync(string model)
+    {
+        // Query elements matching query text content or response content
+        var elements = await _page.Locator(".query-text, [class*='query-text'], query-content, [class*='query-content'], message-content, [class*='message-content']").AllAsync();
+        var sb = new System.Text.StringBuilder();
+        foreach (var el in elements)
+        {
+            string className = await el.GetAttributeAsync("class") ?? "";
+            string tagName = await el.EvaluateAsync<string>("el => el.tagName") ?? "";
+            string text = await el.InnerTextAsync();
+            text = text.Trim();
+            if (string.IsNullOrEmpty(text)) continue;
+
+            if (className.Contains("query-") || tagName.Contains("QUERY"))
+            {
+                sb.AppendLine($"[ROLE:USER]{text}");
+            }
+            else
+            {
+                sb.AppendLine($"[ROLE:AI]{text}");
+            }
+        }
+        return sb.ToString().Trim();
+    }
+
+    // Renames a specific chat session in the sidebar
+    public async Task<string> RenameChatSessionAsync(string model, int sessionIndex, string newName)
+    {
+        var chatLogs = await _page.Locator("[data-test-id='all-conversations'] a").AllAsync();
+        if (sessionIndex < 0 || sessionIndex >= chatLogs.Count)
+        {
+            return $"Error: Session index {sessionIndex} out of bounds.";
+        }
+        var targetLog = chatLogs[sessionIndex];
+        
+        var actionsBtn = targetLog.Locator("..").Locator("[data-test-id=\"actions-menu-button\"]");
+        if (await actionsBtn.CountAsync() == 0)
+        {
+            actionsBtn = targetLog.Locator("..").GetByRole(AriaRole.Button, new() { NameRegex = new System.Text.RegularExpressions.Regex("^More options for") });
+        }
+        await actionsBtn.ClickAsync();
+        
+        await _page.Locator("[data-test-id=\"rename-button\"]").ClickAsync();
+        await _page.Locator("[data-test-id=\"edit-title-input\"]").FillAsync(newName);
+        await _page.Locator("[data-test-id=\"save-button\"]").ClickAsync();
+        
+        return $"Renamed session [{sessionIndex}] to: {newName}";
+    }
+
+    // Deletes a specific chat session in the sidebar
+    public async Task<string> DeleteChatSessionAsync(string model, int sessionIndex)
+    {
+        var chatLogs = await _page.Locator("[data-test-id='all-conversations'] a").AllAsync();
+        if (sessionIndex < 0 || sessionIndex >= chatLogs.Count)
+        {
+            return $"Error: Session index {sessionIndex} out of bounds.";
+        }
+        var targetLog = chatLogs[sessionIndex];
+        
+        var actionsBtn = targetLog.Locator("..").Locator("[data-test-id=\"actions-menu-button\"]");
+        if (await actionsBtn.CountAsync() == 0)
+        {
+            actionsBtn = targetLog.Locator("..").GetByRole(AriaRole.Button, new() { NameRegex = new System.Text.RegularExpressions.Regex("^More options for") });
+        }
+        await actionsBtn.ClickAsync();
+        
+        await _page.Locator("[data-test-id=\"delete-button\"]").ClickAsync();
+        await _page.Locator("[data-test-id=\"confirm-button\"]").ClickAsync();
+        
+        return $"Deleted session [{sessionIndex}].";
+    }
+
     // -----------------------------------------------------------------------
     // Private automation providers — each one handles a specific AI site.
     // They all return a string: either the AI's response or an error message.

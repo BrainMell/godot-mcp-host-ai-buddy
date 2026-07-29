@@ -40,6 +40,7 @@ public partial class ChatDock : Control
     private Button _clearBtn = null!;
     private Button _copyBtn  = null!;
     private Button _sessionsBtn = null!;
+    private Button _newChatBtn = null!;
     private Button _prevSessionBtn = null!;
     private Button _nextSessionBtn = null!;
     private Label _sessionIndexLbl = null!;
@@ -122,6 +123,8 @@ public partial class ChatDock : Control
             _sendBtn.Disconnect("pressed", new Callable(this, nameof(OnSendButtonPressed)));
         if (_sessionsBtn != null && _sessionsBtn.IsConnected("pressed", new Callable(this, nameof(OnSessionsHistoryPressed))))
             _sessionsBtn.Disconnect("pressed", new Callable(this, nameof(OnSessionsHistoryPressed)));
+        if (_newChatBtn != null && _newChatBtn.IsConnected("pressed", new Callable(this, nameof(OnNewChatPressed))))
+            _newChatBtn.Disconnect("pressed", new Callable(this, nameof(OnNewChatPressed)));
         if (_prevSessionBtn != null && _prevSessionBtn.IsConnected("pressed", new Callable(this, nameof(OnPrevSessionPressed))))
             _prevSessionBtn.Disconnect("pressed", new Callable(this, nameof(OnPrevSessionPressed)));
         if (_nextSessionBtn != null && _nextSessionBtn.IsConnected("pressed", new Callable(this, nameof(OnNextSessionPressed))))
@@ -263,6 +266,9 @@ result_json
             _sessionActive = true;
             AppendMessage("system", "session ready.");
             SetStatus("ready", StatusOkColor);
+
+            // Silent load chat history at startup so counter/navigation is populated straight away
+            await ShowChatSessionsAsync(silent: true);
         }
         catch (Exception ex)
         {
@@ -412,6 +418,21 @@ result_json
         _sessionsBtn.AddThemeColorOverride("font_hover_color", AccentColor);
         _sessionsBtn.Connect("pressed", new Callable(this, nameof(OnSessionsHistoryPressed)));
         headerInner.AddChild(_sessionsBtn);
+
+        // New Chat button
+        _newChatBtn = new Button
+        {
+            Text = "new",
+            Flat = true,
+            CustomMinimumSize = new Vector2(0, 22),
+            MouseFilter = MouseFilterEnum.Stop,
+        };
+        ApplyMonospaceFont(_newChatBtn);
+        _newChatBtn.AddThemeFontSizeOverride("font_size", 11);
+        _newChatBtn.AddThemeColorOverride("font_color", FgDimColor);
+        _newChatBtn.AddThemeColorOverride("font_hover_color", AccentColor);
+        _newChatBtn.Connect("pressed", new Callable(this, nameof(OnNewChatPressed)));
+        headerInner.AddChild(_newChatBtn);
 
         // Prev Session button
         _prevSessionBtn = new Button
@@ -683,6 +704,26 @@ result_json
                 }
                 return;
             }
+            else if (command.StartsWith("rename "))
+            {
+                _input.Clear();
+                string newName = text.Substring(text.IndexOf(" ") + 1).Trim();
+                if (string.IsNullOrEmpty(newName))
+                {
+                    AppendMessage("error", "Usage: /rename <new_name>");
+                }
+                else
+                {
+                    await RenameActiveSessionAsync(newName);
+                }
+                return;
+            }
+            else if (command == "delete")
+            {
+                _input.Clear();
+                await DeleteActiveSessionAsync();
+                return;
+            }
             else if (command == "clear")
             {
                 ClearChat();
@@ -730,6 +771,8 @@ result_json
                 AppendMessage("system", "Available commands:\n" +
                     "/sessions - List past chat sessions\n" +
                     "/session <index> - Switch to a past chat session by index\n" +
+                    "/rename <new_name> - Rename the current active chat session\n" +
+                    "/delete - Delete the current active chat session\n" +
                     "/clear - Clear the chat output\n" +
                     "/copy - Copy the chat log to clipboard\n" +
                     "/model <model_name> - Switch between available models (gemini, Chatgpt, Zai)\n" +
@@ -1090,6 +1133,11 @@ result_json
     // CHAT SESSIONS HISTORY & NAVIGATION
     // =======================================================================
 
+    private void OnNewChatPressed()
+    {
+        ClearChat();
+    }
+
     private async void OnSessionsHistoryPressed()
     {
         await ShowChatSessionsAsync();
@@ -1113,21 +1161,21 @@ result_json
         }
     }
 
-    private async Task ShowChatSessionsAsync()
+    private async Task ShowChatSessionsAsync(bool silent = false)
     {
         if (_agent == null)
         {
-            AppendMessage("error", "agent not initialized.");
+            if (!silent) AppendMessage("error", "agent not initialized.");
             return;
         }
 
-        AppendMessage("system", "Fetching recent chat sessions from " + _currentModel + "...");
-        SetWaiting(true);
+        if (!silent) AppendMessage("system", "Fetching recent chat sessions from " + _currentModel + "...");
+        if (!silent) SetWaiting(true);
 
         try
         {
             string result = await _agent.CheckChatHistoryAsync(_currentModel);
-            AppendMessage("system", result);
+            if (!silent) AppendMessage("system", result);
 
             // Parse session count from the output text block
             int count = 0;
@@ -1149,11 +1197,11 @@ result_json
         }
         catch (Exception ex)
         {
-            AppendMessage("error", "Failed to fetch chat history: " + ex.Message);
+            if (!silent) AppendMessage("error", "Failed to fetch chat history: " + ex.Message);
         }
         finally
         {
-            SetWaiting(false);
+            if (!silent) SetWaiting(false);
         }
     }
 
@@ -1178,12 +1226,102 @@ result_json
                 _currentSessionIndex = index;
                 _sessionActive = true;
                 _sessionPrimed = true; // Subscene/history context is already established
+
+                // 1. Clear the output panel interface
+                _output.Clear();
+
+                // 2. Scrape the messages of this conversation
+                string messagesStr = await _agent.GetChatHistoryMessagesAsync(_currentModel);
+                
+                // 3. Populate output panel with the scraped messages
+                bool hasSystemPrompt = false;
+                string[] msgLines = messagesStr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (string line in msgLines)
+                {
+                    if (line.StartsWith("[ROLE:USER]"))
+                     {
+                         string userText = line.Substring("[ROLE:USER]".Length);
+                         AppendMessage("user", userText);
+                         if (userText.Contains("integrated inside the Godot Game Editor") || userText.Contains("GodotMCP"))
+                         {
+                             hasSystemPrompt = true;
+                         }
+                     }
+                     else if (line.StartsWith("[ROLE:AI]"))
+                     {
+                         string aiText = line.Substring("[ROLE:AI]".Length);
+                         AppendMessage("gemini", aiText);
+                     }
+                }
+
+                // 4. Check if the first prompt has the system prompt
+                if (!hasSystemPrompt)
+                {
+                    AppendMessage("system", "Warning: This conversation was not created by the editor. The agent cannot interact with Godot MCP tools in this session.");
+                }
             }
             UpdateSessionUi();
         }
         catch (Exception ex)
         {
             AppendMessage("error", "Failed to navigate session: " + ex.Message);
+        }
+        finally
+        {
+            SetWaiting(false);
+        }
+    }
+
+    private async Task RenameActiveSessionAsync(string newName)
+    {
+        if (_agent == null) return;
+        if (_currentSessionIndex == -1)
+        {
+            AppendMessage("error", "No active session loaded to rename.");
+            return;
+        }
+        AppendMessage("system", $"Renaming active session to '{newName}'...");
+        SetWaiting(true);
+        try
+        {
+            string res = await _agent.RenameChatSessionAsync(_currentModel, _currentSessionIndex, newName);
+            AppendMessage("system", res);
+            // Reload history silently to update names
+            await ShowChatSessionsAsync(silent: true);
+        }
+        catch (Exception ex)
+        {
+            AppendMessage("error", "Failed to rename session: " + ex.Message);
+        }
+        finally
+        {
+            SetWaiting(false);
+        }
+    }
+
+    private async Task DeleteActiveSessionAsync()
+    {
+        if (_agent == null) return;
+        if (_currentSessionIndex == -1)
+        {
+            AppendMessage("error", "No active session loaded to delete.");
+            return;
+        }
+        AppendMessage("system", $"Deleting active session [{_currentSessionIndex}]...");
+        SetWaiting(true);
+        try
+        {
+            string res = await _agent.DeleteChatSessionAsync(_currentModel, _currentSessionIndex);
+            AppendMessage("system", res);
+            // Clear output, reset index, and reload history
+            _output.Clear();
+            _currentSessionIndex = -1;
+            _totalSessionsCount = 0;
+            await ShowChatSessionsAsync(silent: true);
+        }
+        catch (Exception ex)
+        {
+            AppendMessage("error", "Failed to delete session: " + ex.Message);
         }
         finally
         {
