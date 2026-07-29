@@ -99,6 +99,20 @@ public partial class ChatDock : Control
         AppendMessage("system", "try: \"create a Node2D called Player at [200, 150]\"");
 
         _primingTask = AutoPrimeSessionAsync();
+        _ = InitHistorySyncAsync();
+    }
+
+    private async Task InitHistorySyncAsync()
+    {
+        if (_primingTask != null)
+        {
+            try
+            {
+                await _primingTask;
+            }
+            catch { }
+        }
+        await ShowChatSessionsAsync(silent: true);
     }
 
     public override void _Notification(int what)
@@ -266,9 +280,6 @@ result_json
             _sessionActive = true;
             AppendMessage("system", "session ready.");
             SetStatus("ready", StatusOkColor);
-
-            // Silent load chat history at startup so counter/navigation is populated straight away
-            await ShowChatSessionsAsync(silent: true);
         }
         catch (Exception ex)
         {
