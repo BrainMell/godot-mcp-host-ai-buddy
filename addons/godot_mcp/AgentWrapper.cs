@@ -49,10 +49,6 @@ public class ChatService : IDisposable
         {
             try { instance.Dispose(); } catch { }
         }
-        // CRITICAL: Playwright's Dispose() kills the Node process, but the stdout/stderr
-        // reader threads take a moment to unwind. If we return from this event while those
-        // threads are still alive, Godot will abort the assembly unload. Give them time.
-        System.Threading.Thread.Sleep(2000);
     }
 
     public ChatService()
@@ -671,8 +667,32 @@ public class ChatService : IDisposable
         // Step 1: Signal cancellation FIRST so all active loops wake up
         try { _cts.Cancel(); } catch { }
 
-        // Step 2: Dispose Playwright (instantly terminates connection and kills node/browser subprocesses)
-        try { _playwright?.Dispose(); } catch { }
+        // Step 2: Asynchronously close the browser context and dispose Playwright on the ThreadPool
+        // to bypass Godot's SynchronizationContext and prevent deadlocks on the main thread.
+        var context = _context;
+        var playwright = _playwright;
+        if (context != null || playwright != null)
+        {
+            var cleanupTask = Task.Run(async () =>
+            {
+                try
+                {
+                    if (context != null)
+                    {
+                        await context.CloseAsync().ConfigureAwait(false);
+                    }
+                }
+                catch { }
+                try
+                {
+                    playwright?.Dispose();
+                }
+                catch { }
+            });
+
+            // Wait up to 2.5 seconds for the background process to exit
+            cleanupTask.Wait(2500);
+        }
 
         // Step 3: Dispose the CancellationTokenSource itself
         try { _cts.Dispose(); } catch { }
