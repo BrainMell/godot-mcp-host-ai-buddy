@@ -34,46 +34,6 @@ namespace GodotMCP;
 [Tool]
 public partial class McpHttpServer : Node
 {
-    private static readonly List<McpHttpServer> _activeServers = new List<McpHttpServer>();
-
-    public McpHttpServer()
-    {
-        lock (_activeServers)
-        {
-            _activeServers.Add(this);
-            if (_activeServers.Count == 1)
-            {
-                var alc = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(typeof(McpHttpServer).Assembly);
-                if (alc != null)
-                {
-                    alc.Unloading += OnAssemblyUnloading;
-                }
-            }
-        }
-    }
-
-    private static void OnAssemblyUnloading(System.Runtime.Loader.AssemblyLoadContext context)
-    {
-        GD.Print("[GodotMCP] Assembly unloading. Stopping active McpHttpServer listeners...");
-        List<McpHttpServer> toStop;
-        lock (_activeServers)
-        {
-            toStop = new List<McpHttpServer>(_activeServers);
-            _activeServers.Clear();
-        }
-        foreach (var server in toStop)
-        {
-            try
-            {
-                server.Stop();
-            }
-            catch (Exception ex)
-            {
-                GD.PrintErr("[GodotMCP] Error during McpHttpServer assembly unloading cleanup: " + ex.Message);
-            }
-        }
-    }
-
     // The plugin that owns this server (needed for some editor operations)
     public EditorPlugin? EditorPlugin { get; set; }
 
@@ -127,10 +87,6 @@ public partial class McpHttpServer : Node
 
     public void Stop()
     {
-        lock (_activeServers)
-        {
-            _activeServers.Remove(this);
-        }
         if (_tcpServer != null)
         {
             _tcpServer.Stop();
