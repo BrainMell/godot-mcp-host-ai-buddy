@@ -52,7 +52,7 @@ public class ChatService : IDisposable
         // CRITICAL: Playwright's Dispose() kills the Node process, but the stdout/stderr
         // reader threads take a moment to unwind. If we return from this event while those
         // threads are still alive, Godot will abort the assembly unload. Give them time.
-        System.Threading.Thread.Sleep(500);
+        System.Threading.Thread.Sleep(2000);
     }
 
     public ChatService()

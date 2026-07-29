@@ -90,7 +90,7 @@ public partial class GodotMcpPlugin : EditorPlugin
         if (_editorDock != null)
         {
             RemoveDock(_editorDock);
-            _editorDock.QueueFree();
+            _editorDock.Free();
             _editorDock = null;
             _dock = null;
         }
@@ -99,7 +99,7 @@ public partial class GodotMcpPlugin : EditorPlugin
         if (_server != null)
         {
             _server.Stop();
-            _server.QueueFree();
+            _server.Free();
             _server = null;
         }
 
