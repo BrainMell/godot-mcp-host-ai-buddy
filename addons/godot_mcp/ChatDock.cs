@@ -51,6 +51,7 @@ public partial class ChatDock : Control
     // _sessionPrimed : true = system prompt has already been sent, AI knows its role
     private bool _sessionActive = false;
     private bool _sessionPrimed = false;
+    private Task? _primingTask;
     private string _currentModel = "gemini";
 
     // Tool call parser: matches [CALL]{...json...}[/CALL]
@@ -89,6 +90,8 @@ public partial class ChatDock : Control
 
         AppendMessage("system", "godot-mcp ready. type a command or ask a question.");
         AppendMessage("system", "try: \"create a Node2D called Player at [200, 150]\"");
+
+        _primingTask = AutoPrimeSessionAsync();
     }
 
     public override void _Notification(int what)
@@ -218,6 +221,35 @@ result_json
             + "\n\nYou are now set up. Respond only with: READY";
 
         return await _agent!.SendMessageAsync(primeMessage, false, _currentModel, keepSession: false);
+    }
+
+    private async Task AutoPrimeSessionAsync()
+    {
+        if (_agent == null) return;
+
+        try
+        {
+            SetWaiting(true);
+            AppendMessage("system", "priming session with tool definitions...");
+            SetStatus("priming", StatusBusyColor);
+
+            string primeAck = await PrimeSessionAsync();
+            GD.Print($"[GodotMCP] Prime ack: {primeAck}");
+
+            _sessionPrimed = true;
+            _sessionActive = true;
+            AppendMessage("system", "session ready.");
+            SetStatus("ready", StatusOkColor);
+        }
+        catch (Exception ex)
+        {
+            AppendMessage("error", "Priming failed: " + ex.Message);
+            SetStatus("error", StatusErrColor);
+        }
+        finally
+        {
+            SetWaiting(false);
+        }
     }
 
     // =======================================================================
@@ -543,18 +575,21 @@ result_json
                     _currentModel = "gemini";
                     _sessionPrimed = false;
                     _sessionActive = false;
+                    _primingTask = AutoPrimeSessionAsync();
                     return;
                 case "model chatgpt":
                     AppendMessage("system", "Switching to ChatGPT model...");
                     _currentModel = "chatgpt";
                     _sessionPrimed = false;
                     _sessionActive = false;
+                    _primingTask = AutoPrimeSessionAsync();
                     return;
                 case "model zai":
                     AppendMessage("system", "Switching to Zai model...");
                     _currentModel = "zai";
                     _sessionPrimed = false;
                     _sessionActive = false;
+                    _primingTask = AutoPrimeSessionAsync();
                     return;
                 case "help":
                     AppendMessage("system", "Available commands:\n" +
@@ -588,23 +623,22 @@ result_json
                 AppendMessage("system", "session lost — re-priming...");
                 _sessionPrimed = false;
                 _sessionActive = false;
+                _primingTask = AutoPrimeSessionAsync();
             }
 
             // --- Session priming --------------------------------------------
-            // If this is the very first message of this session, send the
-            // system prompt alone first so Gemini can absorb its role without
-            // the user's command being buried at the bottom of a wall of text.
             if (!_sessionPrimed)
             {
-                AppendMessage("system", "priming session with tool definitions...");
-                SetStatus("priming", StatusBusyColor);
-
-                string primeAck = await PrimeSessionAsync();
-                GD.Print($"[GodotMCP] Prime ack: {primeAck}");
-
-                _sessionPrimed = true;
-                _sessionActive = true;
-                AppendMessage("system", "session ready.");
+                if (_primingTask != null)
+                {
+                    AppendMessage("system", "Waiting for session priming to finish...");
+                    await _primingTask;
+                }
+                else
+                {
+                    _primingTask = AutoPrimeSessionAsync();
+                    await _primingTask;
+                }
             }
 
             // Now send the user's actual message as a clean, short turn
@@ -863,10 +897,10 @@ result_json
     private void ClearChat()
     {
         _output.Clear();
-        // Reset session so the next message starts a fresh primed Gemini conversation
         _sessionActive = false;
         _sessionPrimed = false;
-        AppendMessage("system", "chat cleared. next message will start a new session.");
+        AppendMessage("system", "chat cleared. Starting a new session...");
+        _primingTask = AutoPrimeSessionAsync();
     }
 
     // Copy the full chat log as plain text to the clipboard
