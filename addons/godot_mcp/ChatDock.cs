@@ -84,7 +84,7 @@ public partial class ChatDock : Control
 
     // -- Cached monospace font ----------------------------------------------
     // ? because it's null until the first call to GetMonospaceFont()
-    private static Font? _monospaceFont;
+    private Font? _monospaceFont;
 
     // -----------------------------------------------------------------------
     // _Ready — called by Godot when this node enters the scene tree
