@@ -776,13 +776,22 @@ public partial class McpHttpServer : Node
         for (int i = 0; i < childCount; i++)
             children.Add(NodeToMap(node.GetChild(i)));
 
-        return new System.Collections.Generic.Dictionary<string, object>
+        string[] warnings = node.Call("_get_configuration_warnings").AsStringArray();
+
+        var dict = new System.Collections.Generic.Dictionary<string, object>
         {
             ["name"]     = node.Name.ToString(),
             ["type"]     = node.GetClass(),
             ["path"]     = sceneRoot != null ? SceneRelativePath(sceneRoot, node) : node.Name.ToString(),
             ["children"] = children
         };
+
+        if (warnings != null && warnings.Length > 0)
+        {
+            dict["warnings"] = warnings;
+        }
+
+        return dict;
     }
 
     // -- Get the nodes currently selected in the editor --------------------
@@ -795,12 +804,21 @@ public partial class McpHttpServer : Node
         for (int i = 0; i < selected.Count; i++)
         {
             Node n = selected[i];
-            nodeList.Add(new
+            string[] warnings = n.Call("_get_configuration_warnings").AsStringArray();
+            
+            var dict = new System.Collections.Generic.Dictionary<string, object>
             {
-                name = n.Name.ToString(),
-                type = n.GetClass(),
-                path = n.GetPath().ToString()
-            });
+                ["name"] = n.Name.ToString(),
+                ["type"] = n.GetClass(),
+                ["path"] = n.GetPath().ToString()
+            };
+            
+            if (warnings != null && warnings.Length > 0)
+            {
+                dict["warnings"] = warnings;
+            }
+            
+            nodeList.Add(dict);
         }
 
         return Serialize(new { selected = nodeList });
