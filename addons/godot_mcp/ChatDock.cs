@@ -104,10 +104,14 @@ public partial class ChatDock : Control
 
     public override void _ExitTree()
     {
-        if (_clearBtn != null) _clearBtn.Pressed -= ClearChat;
-        if (_copyBtn != null) _copyBtn.Pressed -= CopyChat;
-        if (_input != null) _input.TextSubmitted -= OnSend;
-        if (_sendBtn != null) _sendBtn.Pressed -= OnSendButtonPressed;
+        if (_clearBtn != null && _clearBtn.IsConnected("pressed", new Callable(this, MethodName.ClearChat)))
+            _clearBtn.Disconnect("pressed", new Callable(this, MethodName.ClearChat));
+        if (_copyBtn != null && _copyBtn.IsConnected("pressed", new Callable(this, MethodName.CopyChat)))
+            _copyBtn.Disconnect("pressed", new Callable(this, MethodName.CopyChat));
+        if (_input != null && _input.IsConnected("text_submitted", new Callable(this, MethodName.OnSend)))
+            _input.Disconnect("text_submitted", new Callable(this, MethodName.OnSend));
+        if (_sendBtn != null && _sendBtn.IsConnected("pressed", new Callable(this, MethodName.OnSendButtonPressed)))
+            _sendBtn.Disconnect("pressed", new Callable(this, MethodName.OnSendButtonPressed));
     }
 
     // -----------------------------------------------------------------------
@@ -392,7 +396,7 @@ result_json
         _clearBtn.AddThemeFontSizeOverride("font_size", 11);
         _clearBtn.AddThemeColorOverride("font_color", FgDimColor);
         _clearBtn.AddThemeColorOverride("font_hover_color", FgColor);
-        _clearBtn.Pressed += ClearChat;
+        _clearBtn.Connect("pressed", new Callable(this, MethodName.ClearChat));
         headerInner.AddChild(_clearBtn);
 
         // Copy button
@@ -407,7 +411,7 @@ result_json
         _copyBtn.AddThemeFontSizeOverride("font_size", 11);
         _copyBtn.AddThemeColorOverride("font_color", FgDimColor);
         _copyBtn.AddThemeColorOverride("font_hover_color", FgColor);
-        _copyBtn.Pressed += CopyChat;
+        _copyBtn.Connect("pressed", new Callable(this, MethodName.CopyChat));
         headerInner.AddChild(_copyBtn);
 
         // -- SEPARATOR (thin line below header) -----------------------------
@@ -508,7 +512,7 @@ result_json
         _input.AddThemeStyleboxOverride("read_only", MakeStyle(transparent, 0, transparent));
 
         // When the user presses Enter in the input box, send the message
-        _input.TextSubmitted += OnSend;
+        _input.Connect("text_submitted", new Callable(this, MethodName.OnSend));
         inputRow.AddChild(_input);
 
         // Send button
@@ -529,7 +533,7 @@ result_json
         _sendBtn.AddThemeStyleboxOverride("pressed", MakeStyle(PanelBgColor, 0, AccentColor));
 
         // When the send button is clicked, send the current input text
-        _sendBtn.Pressed += OnSendButtonPressed;
+        _sendBtn.Connect("pressed", new Callable(this, MethodName.OnSendButtonPressed));
         inputRow.AddChild(_sendBtn);
     }
 
