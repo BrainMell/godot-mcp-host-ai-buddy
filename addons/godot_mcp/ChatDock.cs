@@ -58,22 +58,22 @@ public partial class ChatDock : Control
     // The JSON object must have a "tool" key (tool name) and optionally other keys as args.
     private static readonly Regex ToolCallRegex = new Regex(@"\[CALL\]([\ \s\S]*?)\[/CALL\]", RegexOptions.Compiled);
 
-    // -- Color palette (muted, terminal-flavored) --------------------------
-    // These are RGB values in the 0.0 to 1.0 range
-    private static readonly Color BgColor         = new Color(0.08f, 0.09f, 0.11f);   // near-black background
-    private static readonly Color PanelBgColor    = new Color(0.11f, 0.12f, 0.14f);   // slightly lighter panels
-    private static readonly Color BorderColor     = new Color(0.20f, 0.22f, 0.26f);   // subtle separators
-    private static readonly Color FgColor         = new Color(0.85f, 0.87f, 0.90f);   // main text color
-    private static readonly Color FgDimColor      = new Color(0.50f, 0.54f, 0.58f);   // dimmed text
-    private static readonly Color UserRoleColor   = new Color(0.55f, 0.78f, 1.00f);   // user messages (blue)
-    private static readonly Color AiRoleColor     = new Color(0.70f, 0.90f, 0.70f);   // AI replies (green)
-    private static readonly Color SysRoleColor    = new Color(0.60f, 0.62f, 0.66f);   // system messages (gray)
-    private static readonly Color ErrRoleColor    = new Color(0.95f, 0.55f, 0.55f);   // errors (red)
-    private static readonly Color ToolRoleColor   = new Color(0.85f, 0.78f, 0.50f);   // tool calls (yellow)
-    private static readonly Color AccentColor     = new Color(1.00f, 0.65f, 0.20f);   // title, prompt char (orange)
-    private static readonly Color StatusOkColor   = new Color(0.40f, 0.75f, 0.45f);   // "ready" status (green)
-    private static readonly Color StatusBusyColor = new Color(0.90f, 0.78f, 0.30f);   // "thinking" status (yellow)
-    private static readonly Color StatusErrColor  = new Color(0.85f, 0.40f, 0.40f);   // "error" status (red)
+    // -- Color palette (Godot Editor flavored) -------------------------------
+    // These match Godot 4's editor default dark theme colors
+    private static readonly Color BgColor         = new Color(0.13f, 0.15f, 0.20f);   // #202531 - main background
+    private static readonly Color PanelBgColor    = new Color(0.16f, 0.19f, 0.25f);   // #2a303f - panels & header
+    private static readonly Color BorderColor     = new Color(0.25f, 0.28f, 0.35f);   // #404759 - border line
+    private static readonly Color FgColor         = new Color(0.88f, 0.90f, 0.93f);   // #e0e0e0 - default white text
+    private static readonly Color FgDimColor      = new Color(0.55f, 0.57f, 0.65f);   // #8b92a5 - muted gray text
+    private static readonly Color UserRoleColor   = new Color(0.47f, 0.73f, 0.95f);   // #78baec - godot blue for user
+    private static readonly Color AiRoleColor     = new Color(0.55f, 0.85f, 0.65f);   // #8cda8c - assistant green
+    private static readonly Color SysRoleColor    = new Color(0.60f, 0.62f, 0.66f);   // system messages
+    private static readonly Color ErrRoleColor    = new Color(0.95f, 0.40f, 0.40f);   // #f26666 - error red
+    private static readonly Color ToolRoleColor   = new Color(0.90f, 0.75f, 0.45f);   // #e6bf73 - tool amber
+    private static readonly Color AccentColor     = new Color(0.28f, 0.55f, 0.75f);   // #478cbf - primary godot blue accent
+    private static readonly Color StatusOkColor   = new Color(0.40f, 0.75f, 0.45f);   // ready green
+    private static readonly Color StatusBusyColor = new Color(0.90f, 0.78f, 0.30f);   // busy yellow
+    private static readonly Color StatusErrColor  = new Color(0.85f, 0.40f, 0.40f);   // error red
 
     // -- Cached monospace font ----------------------------------------------
     // ? because it's null until the first call to GetMonospaceFont()
@@ -140,6 +140,11 @@ public partial class ChatDock : Control
 
         return $@"You are an AI agent built to help the user build their game inside the Godot Editor.
 You have access to a set of Godot editor tools to inspect and modify the current scene tree.
+
+### Best Practices for Node Selection & Composition
+- **Compare Node Complexity**: Before creating a node, compare Godot's built-in node classes to choose the best fit for the task. Avoid lazy workarounds (e.g., scaling up a generic `Node2D` or `Sprite2D` to represent a repeating floor grid). Instead, use the correct specialized node type (e.g., `TileMap` or `TileMapLayer` for tiling floors, `CharacterBody2D` for physics characters).
+- **Camera Parent Relationships**: When adding a camera designed to follow a character, instantiate the `Camera2D` as a direct child of that character node so it follows the player automatically without requiring manual position syncing.
+- **Composition over Recreation**: Never recreate a character or asset's node tree from scratch in a new scene. Use the `instantiate_subscene` tool to instance existing scene files (like `Character.tscn`) inside world/level scenes.
 
 ### Core Modes of Operation
 You must dynamically choose between two distinct modes of operation depending on the user's input:
@@ -518,7 +523,7 @@ result_json
         _sendBtn.AddThemeColorOverride("font_hover_color", AccentColor);
         _sendBtn.AddThemeColorOverride("font_disabled_color", FgDimColor);
         _sendBtn.AddThemeStyleboxOverride("normal", MakeStyle(PanelBgColor, 0, BorderColor));
-        _sendBtn.AddThemeStyleboxOverride("hover", MakeStyle(new Color(0.16f, 0.17f, 0.20f), 0, BorderColor));
+        _sendBtn.AddThemeStyleboxOverride("hover", MakeStyle(new Color(0.20f, 0.23f, 0.30f), 0, BorderColor));
         _sendBtn.AddThemeStyleboxOverride("disabled", MakeStyle(PanelBgColor, 0, BorderColor));
         _sendBtn.AddThemeStyleboxOverride("focus", MakeStyle(PanelBgColor, 0, BorderColor));
         _sendBtn.AddThemeStyleboxOverride("pressed", MakeStyle(PanelBgColor, 0, AccentColor));
@@ -770,79 +775,114 @@ result_json
     // Adds a message to the output area with color-coding by role
     private void AppendMessage(string role, string text)
     {
-        // Pick the prefix label and color based on the role
-        string prefix;
-        Color prefixColor;
-        bool isDim;
+        string header = "";
+        Color headerColor = FgColor;
+        string bodyText = "";
+        bool useBlockIndent = false;
 
         if (role == "user")
         {
-            prefix = "🧔🏻‍♂️:";
-            prefixColor = UserRoleColor;
-            isDim = false;
+            header = "🧔🏻‍♂️ USER";
+            headerColor = UserRoleColor;
+            useBlockIndent = true;
         }
         else if (role == "ai" || role == "assistant")
         {
-            prefix = "🤖:";
-            prefixColor = AiRoleColor;
-            isDim = false;
+            header = "🤖 ASSISTANT";
+            headerColor = AiRoleColor;
+            useBlockIndent = true;
         }
         else if (role == "system")
         {
-            prefix = "💻:";
-            prefixColor = SysRoleColor;
-            isDim = true;
+            header = "💻 SYSTEM";
+            headerColor = SysRoleColor;
         }
         else if (role == "error")
         {
-            prefix = "❌:";
-            prefixColor = ErrRoleColor;
-            isDim = false;
+            header = "❌ ERROR";
+            headerColor = ErrRoleColor;
         }
         else if (role == "tool")
         {
-            prefix = "🔧:";
-            prefixColor = ToolRoleColor;
-            isDim = true;
+            header = "🔧 TOOL";
+            headerColor = ToolRoleColor;
         }
         else
         {
-            prefix = role;
-            prefixColor = FgColor;
-            isDim = false;
+            header = role.ToUpper();
+            headerColor = FgColor;
         }
 
-        // Escape BBCode special characters ([ becomes [[)
-        // and add indentation after newlines so wrapped lines align
+        string processedText = ConvertMarkdownToBbcode(text).Trim();
+        string headerHex = ColorToHex(headerColor);
+
+        if (useBlockIndent)
+        {
+            bodyText = "[color=" + ColorToHex(FgColor) + "]" + processedText + "[/color]";
+            _output.AppendText(
+                "[color=" + headerHex + "][b]" + header + "[/b][/color]\n" +
+                "[indent]" + bodyText + "[/indent]\n\n"
+            );
+        }
+        else
+        {
+            Color bodyColor = (role == "system" || role == "tool") ? FgDimColor : FgColor;
+            string bodyHex = ColorToHex(bodyColor);
+            bodyText = "[color=" + bodyHex + "]" + processedText + "[/color]";
+            if (role == "system" || role == "tool")
+            {
+                bodyText = "[i]" + bodyText + "[/i]";
+            }
+
+            _output.AppendText(
+                "[color=" + headerHex + "][b]" + header + ":[/b][/color] " + bodyText + "\n"
+            );
+        }
+    }
+
+    private string ConvertMarkdownToBbcode(string text)
+    {
+        // First escape all brackets so we don't conflict with BBCode tags
         string safe = text.Replace("[", "[[");
-        safe = safe.Replace("\n", "\n  ");
 
-        // Convert the prefix color to hex (e.g. "#8CC8FF")
-        string prefixHex = ColorToHex(prefixColor);
+        // Convert block code fences: ```lang\n...\n```
+        var codeBlockRegex = new Regex(@"```(\w+)?\r?\n([\s\S]*?)```");
+        safe = codeBlockRegex.Replace(safe, m => {
+            string lang = m.Groups[1].Value;
+            string code = m.Groups[2].Value;
+            
+            // Revert bracket escape for the code content so brackets in code show correctly
+            string cleanCode = code.Replace("[[", "[");
+            
+            string header = string.IsNullOrEmpty(lang) ? "CODE" : lang.ToUpper();
+            
+            return "\n[color=#478cbf][b]── " + header + " ──[/b][/color]\n" +
+                   "[color=#8ccaee][code]" + cleanCode + "[/code][/color]\n" +
+                   "[color=#478cbf][b]────────────────[/b][/color]\n";
+        });
 
-        // Body text color: use dim color for system/tool messages, normal for others
-        Color bodyColor;
-        if (isDim)
-        {
-            bodyColor = FgDimColor;
-        }
-        else
-        {
-            bodyColor = FgColor;
-        }
-        string bodyHex = ColorToHex(bodyColor);
+        // Convert inline code: `code`
+        var inlineCodeRegex = new Regex(@"`([^`\n]+)`");
+        safe = inlineCodeRegex.Replace(safe, m => {
+            string code = m.Groups[1].Value.Replace("[[", "[");
+            return "[color=#8ccaee][code]" + code + "[/code][/color]";
+        });
 
-        string bodyText = "[color=" + bodyHex + "]" + safe + "[/color]";
-        if (role == "tool")
-        {
-            bodyText = "[i]" + bodyText + "[/i]";
-        }
+        // Convert bold: **text**
+        var boldRegex = new Regex(@"\*\*([^\*]+)\*\*");
+        safe = boldRegex.Replace(safe, "[b]$1[/b]");
 
-        // Append to the output using BBCode markup
-        // Format: [color=#hex][b]prefix[/b][/color]  [color=#hex]message[/color]\n
-        _output.AppendText(
-            "[color=" + prefixHex + "][b]" + prefix + "[/b][/color]  " +
-            bodyText + "\n");
+        // Convert italic: *text* or _text_
+        var italicRegex1 = new Regex(@"\*([^\*]+)\*");
+        safe = italicRegex1.Replace(safe, "[i]$1[/i]");
+        var italicRegex2 = new Regex(@"_([^_]+)_");
+        safe = italicRegex2.Replace(safe, "[i]$1[/i]");
+
+        // Convert bullet points: * or - at start of line
+        var bulletRegex = new Regex(@"(?m)^[ \t]*[*+-][ \t]+(.*)$");
+        safe = bulletRegex.Replace(safe, "  • $1");
+
+        return safe;
     }
 
     // Convert a Godot Color to a hex string like "#FF8C33"

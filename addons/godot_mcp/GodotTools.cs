@@ -365,6 +365,60 @@ public class GodotTools
             }
         ));
 
+        tools.Add(Tool(
+            name: "create_and_attach_script",
+            description: "Create a new GDScript file on disk with the given code content and attach it to the specified node in one operation. " +
+                         "This registers the change in the editor's Undo/Redo history, marks the scene as modified, and updates the editor UI. " +
+                         "If script_path is omitted, it defaults to 'res://scripts/{node_name}.gd'.",
+            parameters: new
+            {
+                type = "object",
+                properties = new
+                {
+                    node_path = Prop("string", "Scene-relative path to the node to attach the script to. E.g. 'Player' or 'World/Enemy'"),
+                    script_content = Prop("string", "The full GDScript code to be written into the script file."),
+                    script_path = Prop("string", "Optional. The res:// path where the script should be saved. E.g. 'res://scripts/Player.gd'. If omitted, it will default to 'res://scripts/{node_name}.gd'.")
+                },
+                required = new string[] { "node_path", "script_content" }
+            }
+        ));
+
+        tools.Add(Tool(
+            name: "instantiate_subscene",
+            description: "Instantiate an existing .tscn scene file as a child node in the currently open scene. " +
+                         "Use this to place/nest key components like Player, Enemies, or UI into a level scene.",
+            parameters: new
+            {
+                type = "object",
+                properties = new
+                {
+                    scene_path = Prop("string", "The res:// path to the .tscn scene file to instantiate. E.g. 'res://Player.tscn'"),
+                    parent_path = Prop("string", "Optional. The scene-relative path to the parent node. E.g. 'World/Enemies'. Defaults to scene root if omitted."),
+                    node_name = Prop("string", "Optional. A custom name to assign to the instantiated node instance.")
+                },
+                required = new string[] { "scene_path" }
+            }
+        ));
+
+        tools.Add(Tool(
+            name: "create_tiled_background",
+            description: "Create a Sprite2D node configured to tile its texture (texture repeat enabled and region rect adjusted) " +
+                         "to cover a large playable floor area. Very useful for camera movement testing.",
+            parameters: new
+            {
+                type = "object",
+                properties = new
+                {
+                    texture_path = Prop("string", "The res:// path to the texture/image file. E.g. 'res://icon.svg'"),
+                    width = Prop("number", "Width of the tiled background floor in pixels. E.g. 3000"),
+                    height = Prop("number", "Height of the tiled background floor in pixels. E.g. 3000"),
+                    parent_path = Prop("string", "Optional. Scene-relative parent node path. Defaults to scene root if omitted."),
+                    node_name = Prop("string", "Optional. The name of the tiled background node. Defaults to 'TiledBackground'.")
+                },
+                required = new string[] { "texture_path", "width", "height" }
+            }
+        ));
+
         return tools;
     }
 
@@ -569,6 +623,35 @@ public class GodotTools
                 script_path = Str(args, "script_path", "")
             });
         }
+        else if (toolName == "create_and_attach_script")
+        {
+            return await Call("create_and_attach_script", new
+            {
+                node_path = Str(args, "node_path", ""),
+                script_content = Str(args, "script_content", ""),
+                script_path = Str(args, "script_path", "")
+            });
+        }
+        else if (toolName == "instantiate_subscene")
+        {
+            return await Call("instantiate_subscene", new
+            {
+                scene_path = Str(args, "scene_path", ""),
+                parent_path = Str(args, "parent_path", ""),
+                node_name = Str(args, "node_name", "")
+            });
+        }
+        else if (toolName == "create_tiled_background")
+        {
+            return await Call("create_tiled_background", new
+            {
+                texture_path = Str(args, "texture_path", ""),
+                width = Num(args, "width", 2000.0),
+                height = Num(args, "height", 2000.0),
+                parent_path = Str(args, "parent_path", ""),
+                node_name = Str(args, "node_name", "")
+            });
+        }
         else
         {
             // Unknown tool — return an error so the LLM knows it messed up
@@ -667,6 +750,26 @@ public class GodotTools
             if (value != null)
             {
                 return value;
+            }
+        }
+        return fallback;
+    }
+
+    private static double Num(Dictionary<string, JsonElement> argsDict, string key, double fallback)
+    {
+        bool keyExists = argsDict.TryGetValue(key, out JsonElement element);
+        if (keyExists)
+        {
+            if (element.ValueKind == JsonValueKind.Number)
+            {
+                return element.GetDouble();
+            }
+            if (element.ValueKind == JsonValueKind.String)
+            {
+                if (double.TryParse(element.GetString(), out double val))
+                {
+                    return val;
+                }
             }
         }
         return fallback;

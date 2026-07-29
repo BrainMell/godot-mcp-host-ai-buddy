@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 
 namespace GodotMCP;
 
@@ -308,6 +309,18 @@ public partial class McpHttpServer : Node
         {
             return AttachScript(parameters);
         }
+        else if (action == "create_and_attach_script")
+        {
+            return CreateAndAttachScript(parameters);
+        }
+        else if (action == "instantiate_subscene")
+        {
+            return InstantiateSubscene(parameters);
+        }
+        else if (action == "create_tiled_background")
+        {
+            return CreateTiledBackground(parameters);
+        }
         else
         {
             return Serialize(new { error = "Unknown action: " + action });
@@ -418,19 +431,317 @@ public partial class McpHttpServer : Node
         if (string.IsNullOrEmpty(scriptPath))
             return Serialize(new { error = "script_path is required" });
 
-        Node node = FindNode(root, nodePath);
+        Node? node = FindNode(root, nodePath);
         if (node == null)
             return Serialize(new { error = "Node not found: " + nodePath });
 
         if (!ResourceLoader.Exists(scriptPath))
             return Serialize(new { error = "Script file not found: " + scriptPath + ". Use write_file first." });
 
-        Script? script = ResourceLoader.Load<Script>(scriptPath);
+        Script? script = ResourceLoader.Load<Script>(scriptPath, "", ResourceLoader.CacheMode.Replace);
         if (script == null)
             return Serialize(new { error = "Failed to load script: " + scriptPath });
 
-        node.SetScript(script);
-        return Serialize(new { attached = scriptPath, node = nodePath });
+        // Force script reload to bypass cached memory version
+        script.Reload(true);
+
+        // Validate that the script inherits from a compatible class of the node
+        string osPath = ProjectSettings.GlobalizePath(scriptPath);
+        if (!File.Exists(osPath))
+            return Serialize(new { error = "Script file not found on disk: " + scriptPath });
+
+        string fileContent = File.ReadAllText(osPath);
+        string extendsClass = "Node";
+        var match = Regex.Match(fileContent, @"^\s*extends\s+(\w+)", RegexOptions.Multiline);
+        if (match.Success)
+        {
+            extendsClass = match.Groups[1].Value;
+        }
+
+        if (ClassDB.ClassExists(extendsClass))
+        {
+            string nodeClass = node.GetClass();
+            if (nodeClass != extendsClass && !ClassDB.IsParentClass(nodeClass, extendsClass))
+            {
+                return Serialize(new 
+                { 
+                    error = $"Script inherits from native type '{extendsClass}', so it can't be assigned to an object of type: '{nodeClass}'" 
+                });
+            }
+        }
+
+        if (EditorPlugin != null)
+        {
+            var undoRedo = EditorPlugin.GetUndoRedo();
+            undoRedo.CreateAction("Attach Script");
+            undoRedo.AddDoProperty(node, "script", script);
+            undoRedo.AddUndoProperty(node, "script", node.GetScript());
+            undoRedo.CommitAction();
+            node.NotifyPropertyListChanged();
+        }
+        else
+        {
+            node.SetScript(script);
+            node.NotifyPropertyListChanged();
+        }
+
+        return Serialize(new { attached = scriptPath, node = nodePath, undoable = EditorPlugin != null });
+    }
+
+    // -- Create a GDScript and attach it to a node ----------------------------
+    private string CreateAndAttachScript(JsonElement p)
+    {
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null)
+            return Serialize(new { error = "No scene open" });
+
+        string nodePath      = GetStr(p, "node_path", "");
+        string scriptContent = GetStr(p, "script_content", "");
+        string scriptPath    = GetStr(p, "script_path", "");
+
+        if (string.IsNullOrEmpty(nodePath))
+            return Serialize(new { error = "node_path is required" });
+        if (string.IsNullOrEmpty(scriptContent))
+            return Serialize(new { error = "script_content is required" });
+
+        Node? node = FindNode(root, nodePath);
+        if (node == null)
+            return Serialize(new { error = "Node not found: " + nodePath });
+
+        // If no script path is provided, default to res://scripts/{node_name}.gd
+        if (string.IsNullOrEmpty(scriptPath))
+        {
+            string cleanName = node.Name.ToString().Replace(" ", "");
+            scriptPath = "res://scripts/" + cleanName + ".gd";
+        }
+
+        string osPath = ProjectSettings.GlobalizePath(scriptPath);
+
+        try
+        {
+            // Ensure parent directory exists
+            string? dir = Path.GetDirectoryName(osPath);
+            if (dir != null && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            // Write script file
+            File.WriteAllText(osPath, scriptContent);
+
+            // Scan files so Godot registers the new resource
+            EditorInterface.Singleton.GetResourceFilesystem().Scan();
+        }
+        catch (Exception ex)
+        {
+            return Serialize(new { error = "Failed to write script file: " + ex.Message });
+        }
+
+        // Wait up to 1 second for filesystem scan to notice the new file
+        Script? script = null;
+        for (int i = 0; i < 10; i++)
+        {
+            if (ResourceLoader.Exists(scriptPath))
+            {
+                script = ResourceLoader.Load<Script>(scriptPath, "", ResourceLoader.CacheMode.Replace);
+                if (script != null)
+                {
+                    script.Reload(true);
+                    break;
+                }
+            }
+            System.Threading.Thread.Sleep(100);
+        }
+
+        // Safe fallback in case of slow filesystem import
+        if (script == null)
+        {
+            try
+            {
+                var gdScript = new GDScript();
+                gdScript.SourceCode = scriptContent;
+                gdScript.Reload();
+                script = gdScript;
+            }
+            catch (Exception ex)
+            {
+                return Serialize(new { error = "Failed to compile/load script: " + ex.Message });
+            }
+        }
+
+        if (script == null)
+            return Serialize(new { error = "Failed to load/compile script at: " + scriptPath });
+
+        // Force script reload just in case
+        script.Reload(true);
+
+        // Validate that the script inherits from a compatible class of the node
+        string extendsClass = "Node";
+        var match = Regex.Match(scriptContent, @"^\s*extends\s+(\w+)", RegexOptions.Multiline);
+        if (match.Success)
+        {
+            extendsClass = match.Groups[1].Value;
+        }
+
+        if (ClassDB.ClassExists(extendsClass))
+        {
+            string nodeClass = node.GetClass();
+            if (nodeClass != extendsClass && !ClassDB.IsParentClass(nodeClass, extendsClass))
+            {
+                return Serialize(new 
+                { 
+                    error = $"Script inherits from native type '{extendsClass}', so it can't be assigned to an object of type: '{nodeClass}'" 
+                });
+            }
+        }
+
+        // Use EditorUndoRedoManager if available to make the action undoable and dirty the scene.
+        if (EditorPlugin != null)
+        {
+            var undoRedo = EditorPlugin.GetUndoRedo();
+            undoRedo.CreateAction("Attach Script");
+            undoRedo.AddDoProperty(node, "script", script);
+            undoRedo.AddUndoProperty(node, "script", node.GetScript());
+            undoRedo.CommitAction();
+            node.NotifyPropertyListChanged();
+        }
+        else
+        {
+            node.SetScript(script);
+            node.NotifyPropertyListChanged();
+        }
+
+        return Serialize(new
+        {
+            written = scriptPath,
+            attached = scriptPath,
+            node = nodePath,
+            undoable = EditorPlugin != null
+        });
+    }
+
+    // -- Instantiate a subscene (.tscn) into the current scene ---------------
+    private string InstantiateSubscene(JsonElement p)
+    {
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null)
+            return Serialize(new { error = "No scene open" });
+
+        string scenePath  = GetStr(p, "scene_path", "");
+        string parentPath = GetStr(p, "parent_path", "");
+        string nodeName   = GetStr(p, "node_name", "");
+
+        if (string.IsNullOrEmpty(scenePath))
+            return Serialize(new { error = "scene_path is required" });
+
+        if (!ResourceLoader.Exists(scenePath))
+            return Serialize(new { error = "Scene file not found: " + scenePath });
+
+        PackedScene? packedScene = ResourceLoader.Load<PackedScene>(scenePath, "", ResourceLoader.CacheMode.Replace);
+        if (packedScene == null)
+            return Serialize(new { error = "Failed to load scene: " + scenePath });
+
+        Node parent = root;
+        if (!string.IsNullOrEmpty(parentPath))
+        {
+            Node? found = FindNode(root, parentPath);
+            if (found == null)
+                return Serialize(new { error = "Parent not found: " + parentPath });
+            parent = found;
+        }
+
+        Node instance = packedScene.Instantiate();
+        if (instance == null)
+            return Serialize(new { error = "Failed to instantiate scene" });
+
+        if (!string.IsNullOrEmpty(nodeName))
+            instance.Name = nodeName;
+
+        if (EditorPlugin != null)
+        {
+            var undoRedo = EditorPlugin.GetUndoRedo();
+            undoRedo.CreateAction("Instantiate Subscene");
+            undoRedo.AddDoMethod(parent, "add_child", instance);
+            undoRedo.AddDoReference(instance);
+            undoRedo.AddUndoMethod(parent, "remove_child", instance);
+            undoRedo.CommitAction();
+            instance.Owner = root;
+        }
+        else
+        {
+            parent.AddChild(instance);
+            instance.Owner = root;
+        }
+
+        return Serialize(new
+        {
+            instantiated = scenePath,
+            name = instance.Name.ToString(),
+            path = SceneRelativePath(root, instance)
+        });
+    }
+
+    // -- Create a tiled background node ---------------------------------------
+    private string CreateTiledBackground(JsonElement p)
+    {
+        Node root = EditorInterface.Singleton.GetEditedSceneRoot();
+        if (root == null)
+            return Serialize(new { error = "No scene open" });
+
+        string texturePath = GetStr(p, "texture_path", "");
+        double width       = GetDouble(p, "width", 2000.0);
+        double height      = GetDouble(p, "height", 2000.0);
+        string parentPath  = GetStr(p, "parent_path", "");
+        string nodeName    = GetStr(p, "node_name", "TiledBackground");
+
+        if (string.IsNullOrEmpty(texturePath))
+            return Serialize(new { error = "texture_path is required" });
+
+        if (!ResourceLoader.Exists(texturePath))
+            return Serialize(new { error = "Texture file not found: " + texturePath });
+
+        Texture2D? texture = ResourceLoader.Load<Texture2D>(texturePath, "", ResourceLoader.CacheMode.Replace);
+        if (texture == null)
+            return Serialize(new { error = "Failed to load texture: " + texturePath });
+
+        Node parent = root;
+        if (!string.IsNullOrEmpty(parentPath))
+        {
+            Node? found = FindNode(root, parentPath);
+            if (found == null)
+                return Serialize(new { error = "Parent not found: " + parentPath });
+            parent = found;
+        }
+
+        Sprite2D sprite = new Sprite2D();
+        sprite.Name = nodeName;
+        sprite.Texture = texture;
+        sprite.TextureRepeat = CanvasItem.TextureRepeatEnum.Enabled;
+        sprite.RegionEnabled = true;
+        sprite.RegionRect = new Rect2(0, 0, (float)width, (float)height);
+        sprite.Position = Vector2.Zero;
+
+        if (EditorPlugin != null)
+        {
+            var undoRedo = EditorPlugin.GetUndoRedo();
+            undoRedo.CreateAction("Create Tiled Background");
+            undoRedo.AddDoMethod(parent, "add_child", sprite);
+            undoRedo.AddDoReference(sprite);
+            undoRedo.AddUndoMethod(parent, "remove_child", sprite);
+            undoRedo.CommitAction();
+            sprite.Owner = root;
+        }
+        else
+        {
+            parent.AddChild(sprite);
+            sprite.Owner = root;
+        }
+
+        return Serialize(new
+        {
+            created = sprite.Name.ToString(),
+            path = SceneRelativePath(root, sprite),
+            width = width,
+            height = height
+        });
     }
 
     // =======================================================================
@@ -1160,8 +1471,6 @@ public partial class McpHttpServer : Node
         });
     }
 
-    // Safely read a string from a JsonElement.
-    // Returns the fallback if the key doesn't exist or isn't a string.
     private static string GetStr(JsonElement el, string key, string fallback)
     {
         if (el.ValueKind == JsonValueKind.Object)
@@ -1174,6 +1483,28 @@ public partial class McpHttpServer : Node
                     if (result != null)
                     {
                         return result;
+                    }
+                }
+            }
+        }
+        return fallback;
+    }
+
+    private static double GetDouble(JsonElement el, string key, double fallback)
+    {
+        if (el.ValueKind == JsonValueKind.Object)
+        {
+            if (el.TryGetProperty(key, out JsonElement v))
+            {
+                if (v.ValueKind == JsonValueKind.Number)
+                {
+                    return v.GetDouble();
+                }
+                if (v.ValueKind == JsonValueKind.String)
+                {
+                    if (double.TryParse(v.GetString(), out double val))
+                    {
+                        return val;
                     }
                 }
             }
