@@ -116,6 +116,8 @@ public partial class ChatDock : Control
             _copyBtn.Disconnect("pressed", new Callable(this, nameof(CopyChat)));
         if (_input != null && _input.IsConnected("text_submitted", new Callable(this, nameof(OnSend))))
             _input.Disconnect("text_submitted", new Callable(this, nameof(OnSend)));
+        if (_input != null && _input.IsConnected("gui_input", new Callable(this, nameof(OnInputGuiInput))))
+            _input.Disconnect("gui_input", new Callable(this, nameof(OnInputGuiInput)));
         if (_sendBtn != null && _sendBtn.IsConnected("pressed", new Callable(this, nameof(OnSendButtonPressed))))
             _sendBtn.Disconnect("pressed", new Callable(this, nameof(OnSendButtonPressed)));
         if (_sessionsBtn != null && _sessionsBtn.IsConnected("pressed", new Callable(this, nameof(OnSessionsHistoryPressed))))
@@ -588,6 +590,7 @@ result_json
 
         // When the user presses Enter in the input box, send the message
         _input.Connect("text_submitted", new Callable(this, nameof(OnSend)));
+        _input.Connect("gui_input", new Callable(this, nameof(OnInputGuiInput)));
         inputRow.AddChild(_input);
 
         // Send button
@@ -617,6 +620,23 @@ result_json
         OnSend(_input.Text);
     }
 
+    private void OnInputGuiInput(InputEvent @event)
+    {
+        if (@event is InputEventKey keyEvent && keyEvent.Pressed)
+        {
+            if (keyEvent.Keycode == Key.Up)
+            {
+                GetViewport().SetInputAsHandled();
+                OnPrevSessionPressed();
+            }
+            else if (keyEvent.Keycode == Key.Down)
+            {
+                GetViewport().SetInputAsHandled();
+                OnNextSessionPressed();
+            }
+        }
+    }
+
     private async void SetModel()
     {
         
@@ -639,7 +659,7 @@ result_json
             return;
         }
 
-        if(text.StartsWith("/"))
+        if (text.StartsWith("/"))
         {
             // Handle slash commands
             string command = text.Substring(1).Trim().ToLower();
@@ -649,7 +669,7 @@ result_json
                 await ShowChatSessionsAsync();
                 return;
             }
-            if (command.StartsWith("session ") || command.StartsWith("select "))
+            else if (command.StartsWith("session ") || command.StartsWith("select "))
             {
                 _input.Clear();
                 string idxStr = command.Substring(command.IndexOf(" ")).Trim();
@@ -663,51 +683,63 @@ result_json
                 }
                 return;
             }
-
-            switch(command)
+            else if (command == "clear")
             {
-                case "clear":
-                    ClearChat();
-                    return;
-                case "copy":
-                    CopyChat();
-                    return;
-                case "model":
-                    AppendMessage("system", "There are currently 3 available models platforms: 'gemini', 'Chatgpt', and 'Zai'.\nUse '/model <model_name>' to switch between them.");
-                    return;
-                case "model gemini":
-                    AppendMessage("system", "Switching to Gemini model...");
-                    _currentModel = "gemini";
-                    _sessionPrimed = false;
-                    _sessionActive = false;
-                    _primingTask = AutoPrimeSessionAsync();
-                    return;
-                case "model chatgpt":
-                    AppendMessage("system", "Switching to ChatGPT model...");
-                    _currentModel = "chatgpt";
-                    _sessionPrimed = false;
-                    _sessionActive = false;
-                    _primingTask = AutoPrimeSessionAsync();
-                    return;
-                case "model zai":
-                    AppendMessage("system", "Switching to Zai model...");
-                    _currentModel = "zai";
-                    _sessionPrimed = false;
-                    _sessionActive = false;
-                    _primingTask = AutoPrimeSessionAsync();
-                    return;
-                case "help":
-                    AppendMessage("system", "Available commands:\n" +
-                        "/sessions - List past chat sessions\n" +
-                        "/session <index> - Switch to a past chat session by index\n" +
-                        "/clear - Clear the chat output\n" +
-                        "/copy - Copy the chat log to clipboard\n" +
-                        "/model <model_name> - Switch between available models (gemini, Chatgpt, Zai)\n" +
-                        "/help - Show this help message");
-                    return;
-                default:
-                    AppendMessage("error", $"unknown command: {command}");
-                    return;
+                ClearChat();
+                return;
+            }
+            else if (command == "copy")
+            {
+                CopyChat();
+                return;
+            }
+            else if (command == "model")
+            {
+                AppendMessage("system", "There are currently 3 available models platforms: 'gemini', 'Chatgpt', and 'Zai'.\nUse '/model <model_name>' to switch between them.");
+                return;
+            }
+            else if (command == "model gemini")
+            {
+                AppendMessage("system", "Switching to Gemini model...");
+                _currentModel = "gemini";
+                _sessionPrimed = false;
+                _sessionActive = false;
+                _primingTask = AutoPrimeSessionAsync();
+                return;
+            }
+            else if (command == "model chatgpt")
+            {
+                AppendMessage("system", "Switching to ChatGPT model...");
+                _currentModel = "chatgpt";
+                _sessionPrimed = false;
+                _sessionActive = false;
+                _primingTask = AutoPrimeSessionAsync();
+                return;
+            }
+            else if (command == "model zai")
+            {
+                AppendMessage("system", "Switching to Zai model...");
+                _currentModel = "zai";
+                _sessionPrimed = false;
+                _sessionActive = false;
+                _primingTask = AutoPrimeSessionAsync();
+                return;
+            }
+            else if (command == "help")
+            {
+                AppendMessage("system", "Available commands:\n" +
+                    "/sessions - List past chat sessions\n" +
+                    "/session <index> - Switch to a past chat session by index\n" +
+                    "/clear - Clear the chat output\n" +
+                    "/copy - Copy the chat log to clipboard\n" +
+                    "/model <model_name> - Switch between available models (gemini, Chatgpt, Zai)\n" +
+                    "/help - Show this help message");
+                return;
+            }
+            else
+            {
+                AppendMessage("error", $"unknown command: {command}");
+                return;
             }
         }
 
