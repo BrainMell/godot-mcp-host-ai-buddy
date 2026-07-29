@@ -1218,46 +1218,76 @@ result_json
 
         try
         {
+            // 1. Get the session count and click it in the browser
             string result = await _agent.GetChatHistoryCountAsync(_currentModel, index);
-            AppendMessage("system", result);
-
-            if (!result.StartsWith("Error"))
+            if (result.StartsWith("Error"))
             {
-                _currentSessionIndex = index;
-                _sessionActive = true;
-                _sessionPrimed = true; // Subscene/history context is already established
+                AppendMessage("error", result);
+                UpdateSessionUi();
+                return;
+            }
 
-                // 1. Clear the output panel interface
-                _output.Clear();
-
-                // 2. Scrape the messages of this conversation
-                string messagesStr = await _agent.GetChatHistoryMessagesAsync(_currentModel);
-                
-                // 3. Populate output panel with the scraped messages
-                bool hasSystemPrompt = false;
-                string[] msgLines = messagesStr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                foreach (string line in msgLines)
+            // 2. Scrape the messages of this conversation first (before clearing the UI)
+            string messagesStr = await _agent.GetChatHistoryMessagesAsync(_currentModel);
+            
+            // 3. Find the first user prompt to inspect it
+            string firstUserPrompt = "";
+            string[] msgLines = messagesStr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string line in msgLines)
+            {
+                if (line.StartsWith("[ROLE:USER]"))
                 {
-                    if (line.StartsWith("[ROLE:USER]"))
-                     {
-                         string userText = line.Substring("[ROLE:USER]".Length);
-                         AppendMessage("user", userText);
-                         if (userText.Contains("integrated inside the Godot Game Editor") || userText.Contains("GodotMCP"))
-                         {
-                             hasSystemPrompt = true;
-                         }
-                     }
-                     else if (line.StartsWith("[ROLE:AI]"))
-                     {
-                         string aiText = line.Substring("[ROLE:AI]".Length);
-                         AppendMessage("gemini", aiText);
-                     }
+                    firstUserPrompt = line.Substring("[ROLE:USER]".Length);
+                    break;
                 }
+            }
 
-                // 4. Check if the first prompt has the system prompt
-                if (!hasSystemPrompt)
+            // 4. Validate the system prompt signature
+            bool isValid = firstUserPrompt.Contains("Godot") || 
+                           firstUserPrompt.Contains("MCP") || 
+                           firstUserPrompt.Contains("tool");
+
+            if (!isValid)
+            {
+                AppendMessage("system", "This isn't a conversation made by the editor, so it can't be continued.");
+                UpdateSessionUi();
+                return;
+            }
+
+            // 5. If valid, set indices and clear the chat UI
+            _currentSessionIndex = index;
+            _sessionActive = true;
+            _sessionPrimed = true;
+            _output.Clear();
+
+            // 6. Replace UI output with the entire conversation history
+            foreach (string line in msgLines)
+            {
+                if (line.StartsWith("[ROLE:USER]"))
                 {
-                    AppendMessage("system", "Warning: This conversation was not created by the editor. The agent cannot interact with Godot MCP tools in this session.");
+                    string userText = line.Substring("[ROLE:USER]".Length).Trim();
+                    // Is it JSON (tool response)?
+                    if (IsJsonString(userText))
+                    {
+                        AppendMessage("tool", $"← {userText}");
+                    }
+                    else
+                    {
+                        AppendMessage("user", userText);
+                    }
+                }
+                else if (line.StartsWith("[ROLE:AI]"))
+                {
+                    string aiText = line.Substring("[ROLE:AI]".Length).Trim();
+                    // Is it JSON (tool call)?
+                    if (IsJsonString(aiText))
+                    {
+                        AppendMessage("tool", $"→ {aiText}");
+                    }
+                    else
+                    {
+                        AppendMessage("gemini", aiText);
+                    }
                 }
             }
             UpdateSessionUi();
@@ -1270,6 +1300,12 @@ result_json
         {
             SetWaiting(false);
         }
+    }
+
+    private bool IsJsonString(string text)
+    {
+        text = text.Trim();
+        return (text.StartsWith("{") && text.EndsWith("}")) || (text.StartsWith("[") && text.EndsWith("]"));
     }
 
     private async Task RenameActiveSessionAsync(string newName)
