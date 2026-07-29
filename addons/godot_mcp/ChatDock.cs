@@ -110,20 +110,20 @@ public partial class ChatDock : Control
 
     public override void _ExitTree()
     {
-        if (_clearBtn != null && _clearBtn.IsConnected("pressed", new Callable(this, MethodName.ClearChat)))
-            _clearBtn.Disconnect("pressed", new Callable(this, MethodName.ClearChat));
-        if (_copyBtn != null && _copyBtn.IsConnected("pressed", new Callable(this, MethodName.CopyChat)))
-            _copyBtn.Disconnect("pressed", new Callable(this, MethodName.CopyChat));
-        if (_input != null && _input.IsConnected("text_submitted", new Callable(this, MethodName.OnSend)))
-            _input.Disconnect("text_submitted", new Callable(this, MethodName.OnSend));
-        if (_sendBtn != null && _sendBtn.IsConnected("pressed", new Callable(this, MethodName.OnSendButtonPressed)))
-            _sendBtn.Disconnect("pressed", new Callable(this, MethodName.OnSendButtonPressed));
-        if (_sessionsBtn != null && _sessionsBtn.IsConnected("pressed", new Callable(this, MethodName.OnSessionsHistoryPressed)))
-            _sessionsBtn.Disconnect("pressed", new Callable(this, MethodName.OnSessionsHistoryPressed));
-        if (_prevSessionBtn != null && _prevSessionBtn.IsConnected("pressed", new Callable(this, MethodName.OnPrevSessionPressed)))
-            _prevSessionBtn.Disconnect("pressed", new Callable(this, MethodName.OnPrevSessionPressed));
-        if (_nextSessionBtn != null && _nextSessionBtn.IsConnected("pressed", new Callable(this, MethodName.OnNextSessionPressed)))
-            _nextSessionBtn.Disconnect("pressed", new Callable(this, MethodName.OnNextSessionPressed));
+        if (_clearBtn != null && _clearBtn.IsConnected("pressed", new Callable(this, nameof(ClearChat))))
+            _clearBtn.Disconnect("pressed", new Callable(this, nameof(ClearChat)));
+        if (_copyBtn != null && _copyBtn.IsConnected("pressed", new Callable(this, nameof(CopyChat))))
+            _copyBtn.Disconnect("pressed", new Callable(this, nameof(CopyChat)));
+        if (_input != null && _input.IsConnected("text_submitted", new Callable(this, nameof(OnSend))))
+            _input.Disconnect("text_submitted", new Callable(this, nameof(OnSend)));
+        if (_sendBtn != null && _sendBtn.IsConnected("pressed", new Callable(this, nameof(OnSendButtonPressed))))
+            _sendBtn.Disconnect("pressed", new Callable(this, nameof(OnSendButtonPressed)));
+        if (_sessionsBtn != null && _sessionsBtn.IsConnected("pressed", new Callable(this, nameof(OnSessionsHistoryPressed))))
+            _sessionsBtn.Disconnect("pressed", new Callable(this, nameof(OnSessionsHistoryPressed)));
+        if (_prevSessionBtn != null && _prevSessionBtn.IsConnected("pressed", new Callable(this, nameof(OnPrevSessionPressed))))
+            _prevSessionBtn.Disconnect("pressed", new Callable(this, nameof(OnPrevSessionPressed)));
+        if (_nextSessionBtn != null && _nextSessionBtn.IsConnected("pressed", new Callable(this, nameof(OnNextSessionPressed))))
+            _nextSessionBtn.Disconnect("pressed", new Callable(this, nameof(OnNextSessionPressed)));
     }
 
     // -----------------------------------------------------------------------
@@ -408,7 +408,7 @@ result_json
         _sessionsBtn.AddThemeFontSizeOverride("font_size", 11);
         _sessionsBtn.AddThemeColorOverride("font_color", FgDimColor);
         _sessionsBtn.AddThemeColorOverride("font_hover_color", AccentColor);
-        _sessionsBtn.Connect("pressed", new Callable(this, MethodName.OnSessionsHistoryPressed));
+        _sessionsBtn.Connect("pressed", new Callable(this, nameof(OnSessionsHistoryPressed)));
         headerInner.AddChild(_sessionsBtn);
 
         // Prev Session button
@@ -424,7 +424,7 @@ result_json
         _prevSessionBtn.AddThemeFontSizeOverride("font_size", 11);
         _prevSessionBtn.AddThemeColorOverride("font_color", FgDimColor);
         _prevSessionBtn.AddThemeColorOverride("font_hover_color", AccentColor);
-        _prevSessionBtn.Connect("pressed", new Callable(this, MethodName.OnPrevSessionPressed));
+        _prevSessionBtn.Connect("pressed", new Callable(this, nameof(OnPrevSessionPressed)));
         headerInner.AddChild(_prevSessionBtn);
 
         // Session Index Label
@@ -452,7 +452,7 @@ result_json
         _nextSessionBtn.AddThemeFontSizeOverride("font_size", 11);
         _nextSessionBtn.AddThemeColorOverride("font_color", FgDimColor);
         _nextSessionBtn.AddThemeColorOverride("font_hover_color", AccentColor);
-        _nextSessionBtn.Connect("pressed", new Callable(this, MethodName.OnNextSessionPressed));
+        _nextSessionBtn.Connect("pressed", new Callable(this, nameof(OnNextSessionPressed)));
         headerInner.AddChild(_nextSessionBtn);
 
         // Spacer before clear button
@@ -471,7 +471,7 @@ result_json
         _clearBtn.AddThemeFontSizeOverride("font_size", 11);
         _clearBtn.AddThemeColorOverride("font_color", FgDimColor);
         _clearBtn.AddThemeColorOverride("font_hover_color", FgColor);
-        _clearBtn.Connect("pressed", new Callable(this, MethodName.ClearChat));
+        _clearBtn.Connect("pressed", new Callable(this, nameof(ClearChat)));
         headerInner.AddChild(_clearBtn);
 
         // Copy button
@@ -486,7 +486,7 @@ result_json
         _copyBtn.AddThemeFontSizeOverride("font_size", 11);
         _copyBtn.AddThemeColorOverride("font_color", FgDimColor);
         _copyBtn.AddThemeColorOverride("font_hover_color", FgColor);
-        _copyBtn.Connect("pressed", new Callable(this, MethodName.CopyChat));
+        _copyBtn.Connect("pressed", new Callable(this, nameof(CopyChat)));
         headerInner.AddChild(_copyBtn);
 
         // -- SEPARATOR (thin line below header) -----------------------------
@@ -587,7 +587,7 @@ result_json
         _input.AddThemeStyleboxOverride("read_only", MakeStyle(transparent, 0, transparent));
 
         // When the user presses Enter in the input box, send the message
-        _input.Connect("text_submitted", new Callable(this, MethodName.OnSend));
+        _input.Connect("text_submitted", new Callable(this, nameof(OnSend)));
         inputRow.AddChild(_input);
 
         // Send button
@@ -608,7 +608,7 @@ result_json
         _sendBtn.AddThemeStyleboxOverride("pressed", MakeStyle(PanelBgColor, 0, AccentColor));
 
         // When the send button is clicked, send the current input text
-        _sendBtn.Connect("pressed", new Callable(this, MethodName.OnSendButtonPressed));
+        _sendBtn.Connect("pressed", new Callable(this, nameof(OnSendButtonPressed)));
         inputRow.AddChild(_sendBtn);
     }
 
